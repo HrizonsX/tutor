@@ -1,0 +1,15 @@
+.bco-*/
+.bco-*
+.bco-memory/
+.bco-tmp/
+node_modules/
+coverage/
+dist/
+build/
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+.env.*
+!.env.example

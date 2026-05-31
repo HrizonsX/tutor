@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=1200, initial-scale=1">
+    <title>学习助手 - 诊断视图</title>
+    <link rel="stylesheet" href="./extension/options.css">
+  </head>
+  <body>
+    <div class="bco-options-root">
+      <div class="bco-options-shell" data-node-id="2:3">
+        <aside class="bco-side-nav" aria-label="系统配置" data-node-id="2:4">
+          <div class="bco-brand">
+            <h1>学习助手</h1>
+            <p>系统配置</p>
+          </div>
+
+          <nav class="bco-primary-nav" aria-label="配置导航">
+            <button class="bco-nav-link" type="button">
+              <svg class="bco-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3.5v2.1M12 18.4v2.1M5.6 5.6l1.5 1.5M16.9 16.9l1.5 1.5M3.5 12h2.1M18.4 12h2.1M5.6 18.4l1.5-1.5M16.9 7.1l1.5-1.5"></path>
+                <circle cx="12" cy="12" r="3.7"></circle>
+              </svg>
+              <span>常规</span>
+            </button>
+            <button class="bco-nav-link" type="button">
+              <svg class="bco-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="5" r="2"></circle>
+                <circle cx="5" cy="17" r="2"></circle>
+                <circle cx="19" cy="17" r="2"></circle>
+                <path d="M11 6.8 6.3 15M13 6.8 17.7 15M7 17h10"></path>
+              </svg>
+              <span>服务商</span>
+            </button>
+            <button class="bco-nav-link" type="button">
+              <svg class="bco-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="4" y="4" width="16" height="6" rx="1"></rect>
+                <rect x="4" y="14" width="16" height="6" rx="1"></rect>
+                <path d="M8 7h.01M8 17h.01M12 7h4M12 17h4"></path>
+              </svg>
+              <span>本地网关</span>
+            </button>
+            <button class="bco-nav-link" type="button">
+              <svg class="bco-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <ellipse cx="12" cy="5" rx="7" ry="3"></ellipse>
+                <path d="M5 5v7c0 1.7 3.1 3 7 3s7-1.3 7-3V5"></path>
+                <path d="M5 12v7c0 1.7 3.1 3 7 3s7-1.3 7-3v-7"></path>
+              </svg>
+              <span>记忆库</span>
+            </button>
+            <button class="bco-nav-link is-active" type="button" aria-current="page">
+              <svg class="bco-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+                <path d="M8 16V9M12 16v-4M16 16V7"></path>
+              </svg>
+              <span>诊断</span>
+            </button>
+            <button class="bco-nav-link" type="button">
+              <svg class="bco-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3 5 6v5c0 4.4 2.9 8.4 7 10 4.1-1.6 7-5.6 7-10V6l-7-3Z"></path>
+              </svg>
+              <span>隐私</span>
+            </button>
+          </nav>
+
+          <div class="bco-side-footer">
+            <button class="bco-export-button" id="bco-export-config" type="button">导出配置</button>
+            <div class="bco-secondary-nav">
+              <button class="bco-nav-link bco-nav-link-small" type="button">
+                <svg class="bco-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 3h8l4 4v14H6V3Z"></path>
+                  <path d="M14 3v5h4M9 13h6M9 17h6"></path>
+                </svg>
+                <span>文档</span>
+              </button>
+              <button class="bco-nav-link bco-nav-link-small" type="button">
+                <svg class="bco-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m8 9-4 3 4 3M16 9l4 3-4 3"></path>
+                </svg>
+                <span>GitHub</span>
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        <main class="bco-main" data-node-id="2:58">
+          <header class="bco-page-header" data-node-id="2:59">
+            <h2>诊断视图</h2>
+            <p>实时系统健康状况、能力矩阵和决策日志。</p>
+          </header>
+
+          <section class="bco-health-grid" aria-label="系统健康状况" data-node-id="2:64">
+            <article class="bco-health-card">
+              <div class="bco-card-label-row">
+                <span class="bco-card-label">服务商模式</span>
+                <svg class="bco-card-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="7" y="4" width="10" height="6" rx="1"></rect>
+                  <rect x="7" y="14" width="10" height="6" rx="1"></rect>
+                  <path d="M10 7h4M10 17h4"></path>
+                </svg>
+              </div>
+              <div class="bco-health-value">
+                <span class="bco-dot is-ok" id="bco-provider-dot"></span>
+                <span id="bco-provider-summary">本地 (llama-3-8b)</span>
+              </div>
+            </article>
+            <article class="bco-health-card">
+              <div class="bco-card-label-row">
+                <span class="bco-card-label">连接状态</span>
+                <svg class="bco-card-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"></path>
+                  <circle cx="12" cy="19" r="1"></circle>
+                </svg>
+              </div>
+              <div class="bco-health-value">
+                <span class="bco-dot is-steady" id="bco-connection-dot"></span>
+                <span id="bco-connection-summary">稳定 (12ms 延迟)</span>
+              </div>
+            </article>
+            <article class="bco-health-card">
+              <div class="bco-card-label-row">
+                <span class="bco-card-label">DOM 权限</span>
+                <svg class="bco-card-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="7" y="10" width="10" height="9" rx="1.5"></rect>
+                  <path d="M9 10V7a3 3 0 0 1 6 0v3"></path>
+                </svg>
+              </div>
+              <div class="bco-health-value">
+                <span class="bco-dot is-ok"></span>
+                <span id="bco-dom-summary">已授予</span>
+              </div>
+            </article>
+          </section>
+
+          <section class="bco-two-grid" aria-label="能力和记忆统计" data-node-id="2:89">
+            <article class="bco-panel-card" data-node-id="2:90">
+              <h3>能力矩阵</h3>
+              <div class="bco-matrix-list" id="bco-capability-list"></div>
+            </article>
+
+            <article class="bco-panel-card" data-node-id="2:114">
+              <h3>记忆统计</h3>
+              <div class="bco-matrix-list">
+                <div class="bco-matrix-row">
+                  <span>架构版本</span>
+                  <span class="bco-pill is-ok" id="bco-memory-architecture">可用</span>
+                </div>
+                <div class="bco-storage-row">
+                  <div class="bco-storage-line">
+                    <span>存储 IO</span>
+                    <strong id="bco-storage-usage">12.4 MB / 50 MB</strong>
+                  </div>
+                  <div class="bco-storage-track" id="bco-storage-track" style="--bco-storage-ratio: 24.8%"></div>
+                </div>
+                <div class="bco-matrix-row">
+                  <span>活动向量数</span>
+                  <span class="bco-pill is-danger" id="bco-vector-count">4,092</span>
+                </div>
+                <div class="bco-matrix-row bco-matrix-row-last">
+                  <span>自动总结</span>
+                  <span class="bco-inline-status">
+                    <span class="bco-dot is-muted" id="bco-summarizer-dot"></span>
+                    <span class="bco-pill is-ok" id="bco-summarizer-status">空闲</span>
+                  </span>
+                </div>
+              </div>
+            </article>
+          </section>
+
+          <section class="bco-decisions-card" aria-label="近期自动决策" data-node-id="2:143">
+            <h3>近期自动决策</h3>
+            <div class="bco-table-wrap">
+              <table class="bco-decisions-table">
+                <colgroup>
+                  <col style="width: 145.14px">
+                  <col style="width: 191.78px">
+                  <col style="width: 191.78px">
+                  <col style="width: 191.13px">
+                  <col style="width: 110.17px">
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>决策 ID</th>
+                    <th>时间戳</th>
+                    <th>逻辑触发</th>
+                    <th>执行操作</th>
+                    <th class="is-right">延迟</th>
+                  </tr>
+                </thead>
+                <tbody id="bco-decision-rows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="bco-json-card" aria-label="运行状态快照" data-node-id="2:195">
+            <div class="bco-json-card-header">
+              <h3>运行状态快照</h3>
+              <span>READ ONLY</span>
+            </div>
+            <pre class="bco-json-code" id="bco-json-snapshot"></pre>
+          </section>
+        </main>
+      </div>
+    </div>
+    <script type="module" src="./options.js"></script>
+  </body>
+</html>

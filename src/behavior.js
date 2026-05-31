@@ -1,0 +1,145 @@
+import { DEFAULT_CONFIG } from "./config.js";
+import { FragmentType } from "./contracts.js";
+import { looksLikeCodeSelection, validateSelectedConcept } from "./concepts.js";
+
+export class BehaviorTracker {
+  constructor({ config = DEFAULT_CONFIG.behavior, now = () => Date.now() } = {}) {
+    this.config = config;
+    this.now = now;
+    this.currentFragmentId = null;
+    this.enteredAt = null;
+    this.lastActivityAt = now();
+    this.fragments = new Map();
+    this.selection = null;
+    this.conceptPauses = new Map();
+  }
+
+  recordActivity(timestamp = this.now()) {
+    this.lastActivityAt = timestamp;
+  }
+
+  observeFragment(fragment, timestamp = this.now()) {
+    if (!fragment?.id) return null;
+    this.recordActivity(timestamp);
+
+    const alreadySeen = this.fragments.has(fragment.id);
+    const existing = this.fragments.get(fragment.id) ?? {
+      firstSeenAt: timestamp,
+      lastSeenAt: timestamp,
+      revisitCount: 0,
+      totalDwellMs: 0,
+      type: fragment.type
+    };
+
+    if (this.currentFragmentId !== fragment.id) {
+      if (this.currentFragmentId && this.enteredAt != null) {
+        const previous = this.fragments.get(this.currentFragmentId);
+        if (previous) {
+          previous.totalDwellMs += Math.max(0, timestamp - this.enteredAt);
+        }
+      }
+
+      if (alreadySeen) {
+        existing.revisitCount += 1;
+      }
+
+      this.currentFragmentId = fragment.id;
+      this.enteredAt = timestamp;
+    }
+
+    existing.lastSeenAt = timestamp;
+    existing.type = fragment.type;
+    this.fragments.set(fragment.id, existing);
+    return this.getSummary(fragment.id, timestamp);
+  }
+
+  recordSelection({ text = "", fragment, timestamp = this.now(), validation = null }) {
+    this.recordActivity(timestamp);
+    const normalized = String(text).trim();
+    const lineCount = normalized ? normalized.split(/\r?\n/).length : 0;
+    const selectedConceptValidation = validation ?? validateSelectedConcept({
+      text: normalized,
+      fragment,
+      sourceText: fragment?.text ?? "",
+      config: this.config
+    });
+    const codeLike =
+      selectedConceptValidation.reason === "code_like_selection" ||
+      fragment?.type === FragmentType.CODE ||
+      looksLikeCode(normalized);
+    const largeSelection =
+      selectedConceptValidation.reason === "large_selection" ||
+      normalized.length >= this.config.largeSelectionChars ||
+      lineCount >= this.config.largeSelectionLines;
+
+    this.selection = {
+      text: normalized,
+      fragmentId: fragment?.id ?? null,
+      timestamp,
+      largeSelection,
+      codeSelection: codeLike,
+      selectedPreciseTerm: selectedConceptValidation.status === "accepted",
+      validation: selectedConceptValidation
+    };
+
+    return this.selection;
+  }
+
+  recordPauseNearConcept({ fragmentId, concept, timestamp = this.now() }) {
+    if (!fragmentId || !concept) return;
+    const key = `${fragmentId}:${concept}`;
+    const pauses = this.conceptPauses.get(key) ?? [];
+    const recent = pauses.filter((pauseAt) => timestamp - pauseAt <= this.config.repeatedPauseWindowMs);
+    recent.push(timestamp);
+    this.conceptPauses.set(key, recent);
+  }
+
+  getSummary(fragmentId = this.currentFragmentId, timestamp = this.now()) {
+    const state = this.fragments.get(fragmentId) ?? {
+      firstSeenAt: timestamp,
+      lastSeenAt: timestamp,
+      revisitCount: 0,
+      totalDwellMs: 0,
+      type: FragmentType.OTHER
+    };
+    const liveDwell =
+      this.currentFragmentId === fragmentId && this.enteredAt != null
+        ? Math.max(0, timestamp - this.enteredAt)
+        : 0;
+
+    const repeatedPauseCount = Array.from(this.conceptPauses.entries())
+      .filter(([key]) => key.startsWith(`${fragmentId}:`))
+      .reduce((max, [, pauses]) => Math.max(max, pauses.length), 0);
+
+    return {
+      fragmentId,
+      dwellMs: state.totalDwellMs + liveDwell,
+      dwellSignal: state.totalDwellMs + liveDwell >= this.config.dwellThresholdMs,
+      revisitCount: state.revisitCount,
+      repeatedPauseCount,
+      selectionText: this.selection?.fragmentId === fragmentId ? this.selection.text : "",
+      selectionTimestamp: this.selection?.fragmentId === fragmentId ? this.selection.timestamp : null,
+      selectedPreciseTerm:
+        this.selection?.fragmentId === fragmentId ? this.selection.selectedPreciseTerm : false,
+      selectionValidation:
+        this.selection?.fragmentId === fragmentId ? summarizeSelectionValidation(this.selection.validation) : null,
+      largeSelection: this.selection?.fragmentId === fragmentId ? this.selection.largeSelection : false,
+      codeSelection: this.selection?.fragmentId === fragmentId ? this.selection.codeSelection : false,
+      inactive: timestamp - this.lastActivityAt >= this.config.inactivityThresholdMs,
+      fragmentType: state.type
+    };
+  }
+}
+
+export function looksLikeCode(text = "") {
+  return looksLikeCodeSelection(text);
+}
+
+function summarizeSelectionValidation(validation = null) {
+  if (!validation) return null;
+  return {
+    status: validation.status,
+    reason: validation.reason ?? null,
+    completedBy: validation.completedBy ?? "unknown"
+  };
+}
