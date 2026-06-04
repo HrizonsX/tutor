@@ -42,6 +42,7 @@ export const LocalMemoryStoreMode = Object.freeze({
 });
 
 export const LOCAL_MEMORY_SUMMARIZER_VERSION = "local-memory-summarizer.v1";
+const USER_PROFILE_VERSION = "user-profile.v1";
 
 const SQLITE_FILE = "local-memory.sqlite";
 const SQLITE_SCHEMA_VERSION = 1;
@@ -106,7 +107,8 @@ export function createLocalMemoryStore({
       return data.cognitiveMemory.conceptProjections[target] ?? rebuildConceptProjection(target);
     },
     readProfileSummary() {
-      return data.profileSummary ?? rebuildProfileSummary();
+      const summary = data.profileSummary ?? rebuildProfileSummary();
+      return summary.userProfile ? summary : rebuildProfileSummary();
     },
     refreshProfileSummary({ force = true } = {}) {
       return refreshProfileSummary({ force });
@@ -415,6 +417,7 @@ export function createLocalMemoryStore({
           timestamp: data.profileSummary.timestamp,
           summarizerVersion: data.profileSummary.summarizerVersion,
           hints: data.profileSummary.hints ?? {},
+          userProfile: data.profileSummary.userProfile ?? null,
           uncertainty: data.profileSummary.uncertainty ?? null,
           sourceEventIds: data.profileSummary.sourceEventIds ?? []
         } : null,
@@ -1575,6 +1578,9 @@ export function createLocalMemoryStore({
     const allEvents = [...data.events, ...data.profileEvents];
     const promotableCandidates = data.memoryCandidates.filter((candidate) => candidate.status !== "rejected");
     const timestamp = now();
+    const hints = deriveProfileHints(allEvents, [], config);
+    const interests = deriveInterestProfile(allEvents, data.cognitiveMemory.conceptProjections, config);
+    const explanationPreferences = deriveExplanationPreferences(allEvents);
     data.profileSummary = {
       id: "profile_summary",
       kind: "profile_memory_summary",
@@ -1584,9 +1590,17 @@ export function createLocalMemoryStore({
       eventCount: allEvents.length,
       lastEventAt: Math.max(...allEvents.map((event) => Number(event.timestamp ?? 0)), 0) || null,
       summarizerVersion: LOCAL_MEMORY_SUMMARIZER_VERSION,
-      hints: deriveProfileHints(allEvents, [], config),
-      interests: deriveInterestProfile(allEvents, data.cognitiveMemory.conceptProjections, config),
-      explanationPreferences: deriveExplanationPreferences(allEvents),
+      hints,
+      interests,
+      explanationPreferences,
+      userProfile: deriveUserPreferenceProfile({
+        events: allEvents,
+        candidates: promotableCandidates,
+        hints,
+        interests,
+        explanationPreferences,
+        timestamp
+      }),
       uncertainty: deriveUncertainty(allEvents)
     };
     return data.profileSummary;
@@ -2447,6 +2461,147 @@ function deriveInterestProfile(events = [], conceptProjections = {}, config = DE
   };
 }
 
+function deriveUserPreferenceProfile({
+  events = [],
+  candidates = [],
+  hints = {},
+  interests = {},
+  explanationPreferences = {},
+  timestamp = Date.now()
+} = {}) {
+  const mutedKnowledgeTypes = Array.isArray(hints.mutedKnowledgeTypes) ? hints.mutedKnowledgeTypes : [];
+  const difficultKnowledgeTypes = Array.isArray(hints.difficultKnowledgeTypes) ? hints.difficultKnowledgeTypes : [];
+  const styleCounts = explanationPreferences.styleCounts ?? {};
+  const feedbackCounts = {
+    known: countEvents(events, MemoryEventType.MARKED_KNOWN),
+    confusing: countEvents(events, MemoryEventType.MARKED_CONFUSING),
+    wrong: countEvents(events, MemoryEventType.MARKED_WRONG),
+    regeneration: countEvents(events, MemoryEventType.REQUESTED_REGENERATION),
+    simpler: countEvents(events, MemoryEventType.REQUESTED_SIMPLER),
+    moreContext: countEvents(events, MemoryEventType.REQUESTED_MORE_CONTEXT),
+    dismissed: countEvents(events, MemoryEventType.DISMISSED) + countEvents(events, MemoryEventType.USER_IGNORED_OVERLAY),
+    mutedObject: countEvents(events, MemoryEventType.MUTED_OBJECT),
+    mutedCategory: countEvents(events, MemoryEventType.MUTED_CATEGORY)
+  };
+  const preferredStyle = explanationPreferences.preferredStyle ?? hints.preferredStyle ?? null;
+  const detailLevel = hints.explanationDetail === "more_detailed" ||
+    preferredStyle === ExplanationStyle.BACKGROUND ||
+    feedbackCounts.confusing > 0 ||
+    feedbackCounts.moreContext > 0
+    ? "more_detailed"
+    : "standard";
+  const supportMode = preferredStyle === ExplanationStyle.SIMPLER || feedbackCounts.simpler > feedbackCounts.moreContext
+    ? "simplified"
+    : preferredStyle === ExplanationStyle.BACKGROUND || feedbackCounts.moreContext > 0 || feedbackCounts.confusing > 0
+      ? "background_context"
+      : "standard";
+  const interventionLevel = feedbackCounts.dismissed >= 2 || mutedKnowledgeTypes.length > 0
+    ? "low"
+    : feedbackCounts.confusing > 0 || feedbackCounts.moreContext > 0
+      ? "supportive"
+      : "standard";
+  const coarseInterestTypes = (interests.knowledgeTypes ?? [])
+    .filter((entry) => entry?.name && !mutedKnowledgeTypes.includes(entry.name))
+    .slice(0, 5)
+    .map((entry) => ({
+      name: entry.name,
+      eventCount: entry.count ?? 0
+    }));
+  const candidateSignals = candidates.reduce((counts, candidate) => {
+    if (!candidate.signal) return counts;
+    counts[candidate.signal] = (counts[candidate.signal] ?? 0) + 1;
+    return counts;
+  }, {});
+  const evidenceEventIds = events.map((event) => event.id).filter(Boolean).slice(-MAX_EVIDENCE_IDS);
+  const metrics = {
+    preferredStyle,
+    detailLevel,
+    supportMode,
+    interventionLevel,
+    mutedKnowledgeTypes,
+    difficultKnowledgeTypes,
+    coarseInterestTypes,
+    feedbackCounts,
+    candidateSignalCounts: candidateSignals,
+    evidenceEventCount: events.length,
+    uncertainty: deriveUncertainty(events)
+  };
+
+  return {
+    id: "user_profile",
+    kind: "user_preference_profile",
+    version: USER_PROFILE_VERSION,
+    audience: "model_context",
+    summary: {
+      preferredStyle,
+      detailLevel,
+      supportMode,
+      interventionLevel
+    },
+    explanation: {
+      preferredStyle,
+      detailLevel,
+      supportMode,
+      styleCounts,
+      uncertainty: explanationPreferences.uncertainty ?? deriveUncertainty([])
+    },
+    interaction: {
+      interventionLevel,
+      lowInterventionPreferred: interventionLevel === "low",
+      mutedKnowledgeTypes,
+      feedbackCounts
+    },
+    learning: {
+      coarseInterestTypes,
+      difficultKnowledgeTypes,
+      needsBackground: supportMode === "background_context",
+      needsSimplification: supportMode === "simplified",
+      reviewSensitivity: difficultKnowledgeTypes.length > 0 || feedbackCounts.confusing > 0 ? "elevated" : "normal"
+    },
+    modelContext: {
+      language: "zh-CN",
+      summaryText: buildUserProfileContextSummary(metrics),
+      metrics
+    },
+    evidence: {
+      eventCount: events.length,
+      candidateSignalCounts: candidateSignals,
+      sourceEventIds: evidenceEventIds,
+      sourceCandidateIds: candidates.map((candidate) => candidate.id).filter(Boolean).slice(-MAX_EVIDENCE_IDS),
+      lastEventAt: Math.max(...events.map((event) => Number(event.timestamp ?? 0)), 0) || null,
+      timestamp
+    },
+    uncertainty: deriveUncertainty(events)
+  };
+}
+
+function buildUserProfileContextSummary(metrics = {}) {
+  const parts = [
+    `用户偏好${describePreferredStyle(metrics.preferredStyle)}解释`,
+    metrics.detailLevel === "more_detailed" ? "解释应更详细并补充必要背景" : "解释可保持标准详略",
+    metrics.interventionLevel === "low" ? "用户倾向低打扰" : metrics.interventionLevel === "supportive" ? "用户需要更积极的辅助提示" : "提示频率可保持常规"
+  ];
+  if (Array.isArray(metrics.coarseInterestTypes) && metrics.coarseInterestTypes.length > 0) {
+    parts.push(`粗粒度兴趣偏向${metrics.coarseInterestTypes.map((entry) => entry.name).join("、")}`);
+  }
+  if (Array.isArray(metrics.difficultKnowledgeTypes) && metrics.difficultKnowledgeTypes.length > 0) {
+    parts.push(`容易困惑的类别包括${metrics.difficultKnowledgeTypes.join("、")}`);
+  }
+  if (Array.isArray(metrics.mutedKnowledgeTypes) && metrics.mutedKnowledgeTypes.length > 0) {
+    parts.push(`应避免主动推荐${metrics.mutedKnowledgeTypes.join("、")}类别`);
+  }
+  return `${parts.join("；")}。`;
+}
+
+function describePreferredStyle(style = "") {
+  if (style === ExplanationStyle.BACKGROUND) return "背景型";
+  if (style === ExplanationStyle.SIMPLER) return "简化型";
+  if (style === ExplanationStyle.ANALOGY) return "类比型";
+  if (style === ExplanationStyle.CONTEXTUAL_ROLE) return "上下文角色型";
+  if (style === ExplanationStyle.CONCISE) return "简洁型";
+  return "上下文适配型";
+}
+
 function deriveExplanationPreferences(events) {
   const styleCounts = {};
   const evidenceEventIds = [];
@@ -2475,6 +2630,10 @@ function deriveUncertainty(events) {
     confidence: events.length >= 3 ? "medium" : "low",
     reason: events.length >= 3 ? "multiple_events" : "limited_events"
   };
+}
+
+function countEvents(events = [], type = "") {
+  return events.filter((event) => event.type === type).length;
 }
 
 function sanitizeCandidateMetadata(metadata = {}) {

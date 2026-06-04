@@ -140,6 +140,80 @@ test("auto profile refresh schedules periodic summary rebuild", async () => {
   }
 });
 
+test("user profile summarizes preferences instead of daily concept content", () => {
+  const current = Date.parse("2026-06-01T10:00:00.000Z");
+  const store = createLocalMemoryStore({ now: () => current, autoProcessBacklog: false });
+  store.writeEvent({
+    event: {
+      id: "evt_background",
+      type: MemoryEventType.REQUESTED_MORE_CONTEXT,
+      canonicalName: "Fujian",
+      knowledgeType: "geography",
+      requestedStyle: "background",
+      timestamp: current - 5_000
+    }
+  });
+  store.writeEvent({
+    event: {
+      id: "evt_confusing",
+      type: MemoryEventType.MARKED_CONFUSING,
+      canonicalName: "Putian",
+      knowledgeType: "geography",
+      timestamp: current - 4_000
+    }
+  });
+  store.writeEvent({
+    event: {
+      id: "evt_mute",
+      type: MemoryEventType.MUTED_CATEGORY,
+      canonicalName: "Movie trivia",
+      knowledgeType: "entertainment",
+      timestamp: current - 3_000
+    }
+  });
+  store.writeEvent({
+    event: {
+      id: "evt_dismiss_one",
+      type: MemoryEventType.DISMISSED,
+      canonicalName: "Toolbar fragment",
+      knowledgeType: "other",
+      timestamp: current - 2_000
+    }
+  });
+  store.writeEvent({
+    event: {
+      id: "evt_dismiss_two",
+      type: MemoryEventType.DISMISSED,
+      canonicalName: "Another toolbar fragment",
+      knowledgeType: "other",
+      timestamp: current - 1_000
+    }
+  });
+  store.processBacklog();
+
+  const profile = store.readProfileSummary();
+  const userProfileText = JSON.stringify(profile.userProfile);
+
+  assert.equal(profile.userProfile.kind, "user_preference_profile");
+  assert.equal(profile.userProfile.audience, "model_context");
+  assert.equal(profile.userProfile.summary.preferredStyle, "background");
+  assert.equal(profile.userProfile.summary.detailLevel, "more_detailed");
+  assert.equal(profile.userProfile.summary.interventionLevel, "low");
+  assert.match(profile.userProfile.modelContext.summaryText, /背景/);
+  assert.match(profile.userProfile.modelContext.summaryText, /详细/);
+  assert.match(profile.userProfile.modelContext.summaryText, /低打扰/);
+  assert.equal(profile.userProfile.modelContext.metrics.preferredStyle, "background");
+  assert.equal(profile.userProfile.modelContext.metrics.interventionLevel, "low");
+  assert.deepEqual(profile.userProfile.modelContext.metrics.coarseInterestTypes.map((entry) => entry.name), ["geography", "other"]);
+  assert.deepEqual(profile.userProfile.learning.difficultKnowledgeTypes, ["geography"]);
+  assert.deepEqual(profile.userProfile.interaction.mutedKnowledgeTypes, ["entertainment"]);
+  assert.deepEqual(profile.userProfile.learning.coarseInterestTypes.map((entry) => entry.name), ["geography", "other"]);
+  assert.equal(Object.hasOwn(profile.userProfile, "recentConcepts"), false);
+  assert.equal(Object.hasOwn(profile.userProfile.learning, "difficultConcepts"), false);
+  assert.doesNotMatch(userProfileText, /Fujian|Putian|Toolbar fragment|Movie trivia/);
+  assert.deepEqual(profile.interests.recentConcepts.slice(0, 2), ["Another toolbar fragment", "Toolbar fragment"]);
+});
+
 test("persistent pre-recall uses FTS Top-K candidates for first explanation bridge", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "bco-memory-fts-recall-"));
   let store = null;

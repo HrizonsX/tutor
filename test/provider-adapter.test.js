@@ -209,11 +209,25 @@ test("openai-compatible helper constructs personalized related concept hint body
     directExplanation: "福建是中国东南沿海省份，莆田位于福建中部沿海。",
     profileSummary: {
       id: "profile_summary",
+      debugMarker: "should_not_leak_daily_concept",
       interests: {
         recentConcepts: ["常太枇杷", "莆田"],
         knowledgeTypes: [{ name: "地理", count: 3 }]
       },
-      hints: { preferredStyle: "concise" }
+      hints: { preferredStyle: "concise" },
+      userProfile: {
+        kind: "user_preference_profile",
+        version: "user-profile.v1",
+        modelContext: {
+          language: "zh-CN",
+          summaryText: "用户偏好背景解释和低打扰提示。",
+          metrics: {
+            preferredStyle: "background",
+            interventionLevel: "low",
+            coarseInterestTypes: [{ name: "geography", eventCount: 3 }]
+          }
+        }
+      }
     },
     constraints: { relatedConceptHintLimit: 20 }
   }, {
@@ -231,6 +245,10 @@ test("openai-compatible helper constructs personalized related concept hint body
   assert.match(body.messages[0].content, /personalized related concept/i);
   assert.equal(payload.target.canonicalName, streamingTarget.canonicalName);
   assert.equal(payload.profileSummary.id, "profile_summary");
+  assert.equal(payload.profileSummary.interests, undefined);
+  assert.equal(payload.userProfileContext.summaryText, "用户偏好背景解释和低打扰提示。");
+  assert.equal(payload.userProfileContext.metrics.interventionLevel, "low");
+  assert.doesNotMatch(body.messages[1].content, /should_not_leak_daily_concept/);
   assert.equal(payload.outputContract.maxItems, 20);
   assert.equal(payload.outputContract.doNotCreateRelations, true);
 });

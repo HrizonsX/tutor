@@ -1016,8 +1016,9 @@ function buildRelatedConceptHintMessages(request = {}, config = {}) {
       content: [
         "You generate personalized related concept hints for a browser reading memory system.",
         "Return only valid JSON.",
-        "Use the current concept, page context, direct explanation, and user profile summary to pick high-value future recall hints.",
-        "Prefer concepts that match the user's demonstrated interests, difficulty, and recent learning path.",
+        "Use the current concept, page context, direct explanation, and userProfileContext to pick high-value future recall hints.",
+        "Treat userProfileContext as preference and learning-style context, not as a daily learning report.",
+        "Prefer concepts that match the user's demonstrated coarse interests, difficulty, and explanation preferences.",
         "Do not create factual relationship edges; these hints are only reverse-recall candidates.",
         "Avoid generic encyclopedia categories unless they are clearly useful for the user's profile."
       ].join(" ")
@@ -1033,7 +1034,8 @@ function buildRelatedConceptHintMessages(request = {}, config = {}) {
           text: clampText(request.minimalContext?.text ?? "", maxContextChars)
         },
         directExplanation: clampText(request.directExplanation ?? request.text ?? "", maxContextChars),
-        profileSummary: request.profileSummary ?? {},
+        profileSummary: summarizeProfileForRelatedConceptHints(request.profileSummary),
+        userProfileContext: buildUserProfileContextForRelatedConceptHints(request.profileSummary, config),
         policy: {
           hintOnly: true,
           sourceConceptMustAlreadyBeExplained: true,
@@ -1050,6 +1052,62 @@ function buildRelatedConceptHintMessages(request = {}, config = {}) {
       })
     }
   ];
+}
+
+function summarizeProfileForRelatedConceptHints(profileSummary = {}) {
+  const userProfile = profileSummary?.userProfile ?? null;
+  return {
+    id: profileSummary?.id ?? null,
+    timestamp: profileSummary?.timestamp ?? null,
+    summarizerVersion: profileSummary?.summarizerVersion ?? null,
+    userProfileVersion: userProfile?.version ?? null,
+    uncertainty: userProfile?.uncertainty ?? profileSummary?.uncertainty ?? null
+  };
+}
+
+function buildUserProfileContextForRelatedConceptHints(profileSummary = {}, config = {}) {
+  const maxContextChars = config?.privacy?.maxContextChars ?? 1200;
+  const userProfile = profileSummary?.userProfile ?? {};
+  const modelContext = userProfile.modelContext ?? {};
+  const metrics = modelContext.metrics ?? createFallbackUserProfileMetrics(profileSummary);
+  return {
+    language: modelContext.language ?? "zh-CN",
+    summaryText: clampText(
+      modelContext.summaryText ?? createFallbackUserProfileSummaryText(metrics),
+      maxContextChars
+    ),
+    metrics,
+    uncertainty: userProfile.uncertainty ?? profileSummary?.uncertainty ?? null
+  };
+}
+
+function createFallbackUserProfileMetrics(profileSummary = {}) {
+  const hints = profileSummary?.hints ?? {};
+  const knowledgeTypes = Array.isArray(profileSummary?.interests?.knowledgeTypes)
+    ? profileSummary.interests.knowledgeTypes
+    : [];
+  return {
+    preferredStyle: hints.preferredStyle ?? null,
+    detailLevel: hints.explanationDetail ?? "standard",
+    supportMode: hints.preferredStyle === "background" ? "background_context" : "standard",
+    interventionLevel: hints.categoryMuted || hints.objectMuted ? "low" : "standard",
+    mutedKnowledgeTypes: hints.mutedKnowledgeTypes ?? [],
+    difficultKnowledgeTypes: hints.difficultKnowledgeTypes ?? [],
+    coarseInterestTypes: knowledgeTypes.slice(0, 5).map((entry) => ({
+      name: entry.name,
+      eventCount: entry.count ?? entry.eventCount ?? 0
+    }))
+  };
+}
+
+function createFallbackUserProfileSummaryText(metrics = {}) {
+  const parts = ["用户画像信号有限"];
+  if (metrics.preferredStyle) parts.push(`偏好解释风格为 ${metrics.preferredStyle}`);
+  if (metrics.detailLevel) parts.push(`解释详略为 ${metrics.detailLevel}`);
+  if (Array.isArray(metrics.coarseInterestTypes) && metrics.coarseInterestTypes.length > 0) {
+    parts.push(`粗粒度兴趣类型为 ${metrics.coarseInterestTypes.map((entry) => entry.name).join(", ")}`);
+  }
+  return `${parts.join("; ")}.`;
 }
 
 function buildHeaders(token = "") {
