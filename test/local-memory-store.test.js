@@ -181,6 +181,36 @@ test("raw event ledger is append-only and generated ids never collide across res
   }
 });
 
+test("queryMemory with allowSyncSummarize false performs no new SQLite writes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "bco-memory-readonly-"));
+  try {
+    const store = createPersistentLocalMemoryStore({ directory, now: () => 1000, autoProcessBacklog: false });
+    store.writeEvent({ event: { id: "evt_ro", type: MemoryEventType.KNOWLEDGE_ENCOUNTERED, canonicalName: "枇杷", timestamp: 900 } });
+    store.processBacklog();
+    store.close();
+
+    const before = new DatabaseSync(join(directory, "local-memory.sqlite"));
+    const jobsBefore = before.prepare("SELECT COUNT(*) AS n FROM summarizer_jobs").get().n;
+    const summariesBefore = before.prepare("SELECT COUNT(*) AS n FROM derived_summaries").get().n;
+    before.close();
+
+    const reader = createPersistentLocalMemoryStore({ directory, now: () => 2000, autoProcessBacklog: false });
+    const packet = reader.queryMemory({ canonicalName: "枇杷", timestamp: 2000, allowSyncSummarize: false });
+    reader.close();
+
+    const after = new DatabaseSync(join(directory, "local-memory.sqlite"));
+    const jobsAfter = after.prepare("SELECT COUNT(*) AS n FROM summarizer_jobs").get().n;
+    const summariesAfter = after.prepare("SELECT COUNT(*) AS n FROM derived_summaries").get().n;
+    after.close();
+
+    assert.equal(packet.status, AgentResultStatus.AVAILABLE);
+    assert.equal(jobsAfter, jobsBefore);
+    assert.equal(summariesAfter, summariesBefore);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("Memory Summarizer derives evidence-backed target state and explanation preferences", () => {
   const store = createLocalMemoryStore({ now: () => 2000, autoProcessBacklog: false });
   store.writeEvent({ event: { id: "evt_confuse_1", type: MemoryEventType.REPEATED_CONFUSION, canonicalName: "PPO clipping", timestamp: 1000 } });

@@ -857,12 +857,13 @@ export function createLocalMemoryStore({
         LOCAL_MEMORY_SUMMARIZER_VERSION
       ]);
     }
-    const staleSet = new Set(targets);
-    for (const row of allSqlite(runtime.sqlite, "SELECT id, canonical_name FROM summarizer_jobs")) {
-      if (!staleSet.has(row.canonical_name) && row.status !== "done") {
-        runSqlite(runtime.sqlite, "UPDATE summarizer_jobs SET status = ?, updated_at = ? WHERE id = ?", ["done", now(), row.id]);
-      }
-    }
+    // One bounded UPDATE instead of SELECT-all + per-row UPDATE: marking
+    // completed jobs done was O(all jobs) per call.
+    const placeholders = targets.map(() => "?").join(", ");
+    runSqlite(runtime.sqlite, `
+      UPDATE summarizer_jobs SET status = 'done', updated_at = ?
+      WHERE status != 'done'${targets.length ? ` AND canonical_name NOT IN (${placeholders})` : ""}
+    `, [now(), ...targets]);
   }
 
   // Idempotent FTS writes: a re-summarized concept replaces its row instead
@@ -915,7 +916,15 @@ export function createLocalMemoryStore({
       if (result.status === AgentResultStatus.UNAVAILABLE) {
         data.summarizer.lastError = result.reason;
         persistSqliteSummarizerState();
+        return;
       }
+      // Re-queue while a backlog remains so a burst larger than one batch
+      // still drains without waiting for the next write.
+      const remaining = unique([
+        ...(data.summarizer.backlogTargets ?? []),
+        ...(data.summarizer.staleTargets ?? [])
+      ]);
+      if (remaining.length > 0 && !runtime.closed) scheduleSummarization();
     };
     const scheduler = globalThis.queueMicrotask ?? ((task) => Promise.resolve().then(task));
     scheduler(run);
@@ -1410,14 +1419,35 @@ export function createLocalMemoryStore({
     return [...byDate.values()];
   }
 
+  // Memoized merged event view for the recall path: rebuilding and
+  // re-filtering [...events, ...profileEvents] per candidate was O(total
+  // events) per query. Events are append-only in RAM, so the combined length
+  // is a sufficient cache key. The cache lives on runtime because this
+  // function is hoisted above the store's return statement.
+  function getRecallEventsView() {
+    const revision = data.events.length + data.profileEvents.length;
+    if (runtime.recallEventsCache?.revision === revision) return runtime.recallEventsCache;
+    const merged = [...data.events, ...data.profileEvents].filter((event) => event.canonicalName);
+    const sorted = [...merged].sort((left, right) => Number(right.timestamp ?? 0) - Number(left.timestamp ?? 0));
+    const byConcept = new Map();
+    for (const event of merged) {
+      const list = byConcept.get(event.canonicalName);
+      if (list) list.push(event);
+      else byConcept.set(event.canonicalName, [event]);
+    }
+    runtime.recallEventsCache = { revision, sorted, byConcept };
+    return runtime.recallEventsCache;
+  }
+
   function selectTopKRecallCandidates({ target = "", currentContext = null, limit = 20, timestamp = now() } = {}) {
     const targetName = normalizeKnowledgeObjectName(target);
+    const eventsView = getRecallEventsView();
     const scored = new Map();
     const addCandidate = (canonicalName, score, meta = {}) => {
       const name = normalizeKnowledgeObjectName(canonicalName);
       if (!name || name === targetName) return;
       const previous = scored.get(name);
-      const profilePriority = recallProfilePriorityForConcept(name);
+      const profilePriority = recallProfilePriorityForConcept(name, eventsView.byConcept.get(name) ?? []);
       if (profilePriority.suppressed) return;
       const nextScore = Number(score ?? 0) + profilePriority.score;
       const timestampValue = meta.timestamp ?? previous?.timestamp ?? timestamp;
@@ -1434,9 +1464,7 @@ export function createLocalMemoryStore({
       }
     };
 
-    for (const [index, event] of [...data.events, ...data.profileEvents]
-      .filter((event) => event.canonicalName)
-      .sort((left, right) => Number(right.timestamp ?? 0) - Number(left.timestamp ?? 0))
+    for (const [index, event] of eventsView.sorted
       .slice(0, Math.max(limit * 2, 20))
       .entries()) {
       addCandidate(event.canonicalName, 70 - index, {
@@ -1498,10 +1526,10 @@ export function createLocalMemoryStore({
       .slice(0, limit);
   }
 
-  function recallProfilePriorityForConcept(canonicalName = "") {
+  function recallProfilePriorityForConcept(canonicalName = "", conceptEvents = null) {
     const name = normalizeKnowledgeObjectName(canonicalName);
     if (!name) return { score: 0, reason: null, suppressed: false };
-    const events = [...data.events, ...data.profileEvents].filter((event) => event.canonicalName === name);
+    const events = conceptEvents ?? [...data.events, ...data.profileEvents].filter((event) => event.canonicalName === name);
     const knowledgeType = latestKnowledgeTypeForConcept(name, events);
     const summaryHints = data.derivedSummaries[name]?.profileHints ?? {};
     const profileHints = mergeProfileHintsForTarget(data.profileSummary?.hints ?? {}, summaryHints, { knowledgeType });
@@ -1884,7 +1912,12 @@ function openSQLiteDatabase(databasePath) {
 }
 
 function initializeSQLiteSchema(db, { schemaVersion, now }) {
-  db.exec("PRAGMA journal_mode = DELETE");
+  // WAL keeps readers unblocked during writes and amortizes fsync cost;
+  // NORMAL is durable enough for a local learning ledger (full sync on
+  // checkpoint). Both drivers checkpoint on close, so tests that reopen the
+  // database see consistent state as long as the store is closed first.
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
