@@ -62,6 +62,7 @@ export function createConfiguredSessionView(redisConfig = {}, { now = () => Date
       url: redisConfig.url,
       keyPrefix: redisConfig.keyPrefix,
       ttlMs: redisConfig.sessionTtlMs,
+      retryCooldownMs: redisConfig.retryCooldownMs,
       now
     });
   }
@@ -130,107 +131,119 @@ export function createPostgresMemoryClient({
     async writeExplanationVersion(version = {}) {
       const unavailable = await ensureAvailable();
       if (unavailable) return unavailable;
-      await activePool.query(`
-        INSERT INTO ${safeSchema}.explanation_versions (
-          id, target, style, text, summary, confidence, timestamp,
-          previous_version_id, feedback_event_id, fact_sensitivity,
-          source, provider, model, structured_response_json,
-          context_summary_json, record_json
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-        ON CONFLICT (id) DO UPDATE SET
-          target = EXCLUDED.target,
-          style = EXCLUDED.style,
-          text = EXCLUDED.text,
-          summary = EXCLUDED.summary,
-          confidence = EXCLUDED.confidence,
-          timestamp = EXCLUDED.timestamp,
-          record_json = EXCLUDED.record_json
-      `, [
-        version.id,
-        version.target,
-        version.style ?? null,
-        version.text ?? "",
-        version.summary ?? "",
-        version.confidence ?? null,
-        version.timestamp ?? now(),
-        version.previousVersionId ?? null,
-        version.feedbackEventId ?? null,
-        version.factSensitivity ?? null,
-        version.source ?? null,
-        version.provider ?? null,
-        version.model ?? null,
-        toJson(version.structuredResponse ?? {}),
-        toJson(version.contextSummary ?? {}),
-        toJson(version)
-      ]);
+      try {
+        await activePool.query(`
+          INSERT INTO ${safeSchema}.explanation_versions (
+            id, target, style, text, summary, confidence, timestamp,
+            previous_version_id, feedback_event_id, fact_sensitivity,
+            source, provider, model, structured_response_json,
+            context_summary_json, record_json
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          ON CONFLICT (id) DO UPDATE SET
+            target = EXCLUDED.target,
+            style = EXCLUDED.style,
+            text = EXCLUDED.text,
+            summary = EXCLUDED.summary,
+            confidence = EXCLUDED.confidence,
+            timestamp = EXCLUDED.timestamp,
+            record_json = EXCLUDED.record_json
+        `, [
+          version.id,
+          version.target,
+          version.style ?? null,
+          version.text ?? "",
+          version.summary ?? "",
+          version.confidence ?? null,
+          version.timestamp ?? now(),
+          version.previousVersionId ?? null,
+          version.feedbackEventId ?? null,
+          version.factSensitivity ?? null,
+          version.source ?? null,
+          version.provider ?? null,
+          version.model ?? null,
+          toJson(version.structuredResponse ?? {}),
+          toJson(version.contextSummary ?? {}),
+          toJson(version)
+        ]);
+      } catch (error) {
+        return unavailablePostgresResult("layered_postgres_write_failed", error);
+      }
       return version;
     },
     async writeMemoryCandidate(candidate = {}) {
       const unavailable = await ensureAvailable();
       if (unavailable) return unavailable;
-      await activePool.query(`
-        INSERT INTO ${safeSchema}.memory_candidates (
-          id, canonical_name, kind, signal, status, uncertainty, timestamp,
-          source_event_ids_json, source_candidate_ids_json,
-          source_explanation_version_id, provider, model, metadata_json, record_json
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-        ON CONFLICT (id) DO UPDATE SET
-          canonical_name = EXCLUDED.canonical_name,
-          kind = EXCLUDED.kind,
-          signal = EXCLUDED.signal,
-          status = EXCLUDED.status,
-          metadata_json = EXCLUDED.metadata_json,
-          record_json = EXCLUDED.record_json
-      `, [
-        candidate.id,
-        candidate.canonicalName,
-        candidate.kind ?? "unknown",
-        candidate.signal ?? "unknown",
-        candidate.status ?? "active",
-        candidate.uncertainty ?? null,
-        candidate.timestamp ?? now(),
-        toJson(candidate.sourceEventIds ?? []),
-        toJson(candidate.sourceCandidateIds ?? []),
-        candidate.sourceExplanationVersionId ?? null,
-        candidate.provider ?? null,
-        candidate.model ?? null,
-        toJson(candidate.metadata ?? {}),
-        toJson(candidate)
-      ]);
+      try {
+        await activePool.query(`
+          INSERT INTO ${safeSchema}.memory_candidates (
+            id, canonical_name, kind, signal, status, uncertainty, timestamp,
+            source_event_ids_json, source_candidate_ids_json,
+            source_explanation_version_id, provider, model, metadata_json, record_json
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          ON CONFLICT (id) DO UPDATE SET
+            canonical_name = EXCLUDED.canonical_name,
+            kind = EXCLUDED.kind,
+            signal = EXCLUDED.signal,
+            status = EXCLUDED.status,
+            metadata_json = EXCLUDED.metadata_json,
+            record_json = EXCLUDED.record_json
+        `, [
+          candidate.id,
+          candidate.canonicalName,
+          candidate.kind ?? "unknown",
+          candidate.signal ?? "unknown",
+          candidate.status ?? "active",
+          candidate.uncertainty ?? null,
+          candidate.timestamp ?? now(),
+          toJson(candidate.sourceEventIds ?? []),
+          toJson(candidate.sourceCandidateIds ?? []),
+          candidate.sourceExplanationVersionId ?? null,
+          candidate.provider ?? null,
+          candidate.model ?? null,
+          toJson(candidate.metadata ?? {}),
+          toJson(candidate)
+        ]);
+      } catch (error) {
+        return unavailablePostgresResult("layered_postgres_write_failed", error);
+      }
       return candidate;
     },
     async writeRelationRecord(relation = {}) {
       const unavailable = await ensureAvailable();
       if (unavailable) return unavailable;
-      await activePool.query(`
-        INSERT INTO ${safeSchema}.relation_records (
-          id, source_canonical_name, relation_type, target_canonical_name,
-          status, confidence, basis, source_dates_json, source_event_ids_json,
-          source_explanation_version_ids_json, occurrence_count, created_at,
-          updated_at, record_json
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-        ON CONFLICT (id) DO UPDATE SET
-          status = EXCLUDED.status,
-          confidence = EXCLUDED.confidence,
-          occurrence_count = EXCLUDED.occurrence_count,
-          updated_at = EXCLUDED.updated_at,
-          record_json = EXCLUDED.record_json
-      `, [
-        relation.id,
-        relation.sourceCanonicalName,
-        relation.relationType,
-        relation.targetCanonicalName,
-        relation.status ?? "candidate",
-        relation.confidence ?? "low",
-        relation.basis ?? null,
-        toJson(relation.sourceDates ?? []),
-        toJson(relation.sourceEventIds ?? []),
-        toJson(relation.sourceExplanationVersionIds ?? []),
-        relation.occurrenceCount ?? 1,
-        relation.createdAt ?? relation.timestamp ?? now(),
-        relation.updatedAt ?? now(),
-        toJson(relation)
-      ]);
+      try {
+        await activePool.query(`
+          INSERT INTO ${safeSchema}.relation_records (
+            id, source_canonical_name, relation_type, target_canonical_name,
+            status, confidence, basis, source_dates_json, source_event_ids_json,
+            source_explanation_version_ids_json, occurrence_count, created_at,
+            updated_at, record_json
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          ON CONFLICT (id) DO UPDATE SET
+            status = EXCLUDED.status,
+            confidence = EXCLUDED.confidence,
+            occurrence_count = EXCLUDED.occurrence_count,
+            updated_at = EXCLUDED.updated_at,
+            record_json = EXCLUDED.record_json
+        `, [
+          relation.id,
+          relation.sourceCanonicalName,
+          relation.relationType,
+          relation.targetCanonicalName,
+          relation.status ?? "candidate",
+          relation.confidence ?? "low",
+          relation.basis ?? null,
+          toJson(relation.sourceDates ?? []),
+          toJson(relation.sourceEventIds ?? []),
+          toJson(relation.sourceExplanationVersionIds ?? []),
+          relation.occurrenceCount ?? 1,
+          relation.createdAt ?? relation.timestamp ?? now(),
+          relation.updatedAt ?? now(),
+          toJson(relation)
+        ]);
+      } catch (error) {
+        return unavailablePostgresResult("layered_postgres_write_failed", error);
+      }
       return relation;
     },
     async processOutboxBatch({ limit = 25, maxAttempts = 5, timestamp = now() } = {}) {
@@ -381,6 +394,7 @@ export function createRedisSessionView({
   url = "",
   keyPrefix = "bco:memory",
   ttlMs = 30 * 60 * 1000,
+  retryCooldownMs = 15000,
   client = null,
   loadRedis = () => import("redis"),
   now = () => Date.now()
@@ -390,13 +404,31 @@ export function createRedisSessionView({
   let reason = null;
   let sessionCount = 0;
   let lastCheckedAt = null;
+  // A transient Redis error must not poison the view forever: after the
+  // cooldown the next operation re-probes; success restores AVAILABLE.
+  let lastFailureAt = 0;
+
+  const inCooldown = () =>
+    status !== AgentResultStatus.AVAILABLE && lastFailureAt > 0 && now() - lastFailureAt < retryCooldownMs;
+  const markRecovered = () => {
+    status = AgentResultStatus.AVAILABLE;
+    reason = null;
+    lastFailureAt = 0;
+    lastCheckedAt = now();
+  };
+  const markFailed = (failureReason) => {
+    status = AgentResultStatus.UNAVAILABLE;
+    reason = failureReason;
+    lastFailureAt = now();
+    lastCheckedAt = now();
+  };
 
   const sessionView = {
     kind: "redis",
     ready: null,
     async recordEvent({ sessionId = "default", canonicalName = "", type = "", timestamp = now() } = {}) {
       await sessionView.ready;
-      if (status !== AgentResultStatus.AVAILABLE) {
+      if (status !== AgentResultStatus.AVAILABLE && (reason === "redis_dependency_missing" || inCooldown())) {
         return { status: AgentResultStatus.UNAVAILABLE, reason: reason ?? "redis_session_unavailable" };
       }
       const name = normalizeKnowledgeObjectName(canonicalName);
@@ -418,17 +450,16 @@ export function createRedisSessionView({
         }
         await activeClient.set(key, JSON.stringify(session), { PX: ttlMs });
         sessionCount += 1;
-        reason = null;
+        markRecovered();
         return { status: AgentResultStatus.AVAILABLE };
       } catch (error) {
-        status = AgentResultStatus.UNAVAILABLE;
-        reason = "redis_session_write_failed";
+        markFailed("redis_session_write_failed");
         return { status, reason };
       }
     },
     async getContext({ sessionId = "default", timestamp = now() } = {}) {
       await sessionView.ready;
-      if (status !== AgentResultStatus.AVAILABLE) {
+      if (status !== AgentResultStatus.AVAILABLE && (reason === "redis_dependency_missing" || inCooldown())) {
         return {
           recentConcepts: [],
           recentlyExplained: [],
@@ -445,11 +476,13 @@ export function createRedisSessionView({
           recentlyExplained: filterActive(session.recentlyExplained, timestamp),
           suppressions: filterActive(session.suppressions, timestamp)
         };
-        await activeClient.set(key, JSON.stringify(active), { PX: ttlMs });
+        // Read path stays read-only: the old write-back raced concurrent
+        // recordEvent calls and refreshed TTLs on mere reads. Single-user
+        // localhost makes lost-expiry pruning acceptable.
+        markRecovered();
         return active;
       } catch {
-        status = AgentResultStatus.UNAVAILABLE;
-        reason = "redis_session_read_failed";
+        markFailed("redis_session_read_failed");
         return { recentConcepts: [], recentlyExplained: [], suppressions: [], status, reason };
       }
     },
@@ -485,6 +518,7 @@ export function createRedisSessionView({
     } catch (error) {
       status = AgentResultStatus.UNAVAILABLE;
       reason = isModuleMissing(error) ? "redis_dependency_missing" : "redis_session_connection_failed";
+      lastFailureAt = now();
     }
     lastCheckedAt = now();
     return sessionView.getHealth();

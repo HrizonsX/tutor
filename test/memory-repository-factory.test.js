@@ -233,6 +233,84 @@ test("Redis session view stores recent concepts with TTL and degrades on write f
   assert.equal(redis.closed, true);
 });
 
+test("Redis session view re-probes after the cooldown and recovers", async () => {
+  let currentTime = 100;
+  const redis = createFakeRedisClient();
+  const sessionView = createRedisSessionView({
+    client: redis,
+    keyPrefix: "bco:test",
+    ttlMs: 1000,
+    retryCooldownMs: 500,
+    now: () => currentTime
+  });
+  await sessionView.ready;
+
+  redis.failSet = true;
+  const failed = await sessionView.recordEvent({ canonicalName: "枇杷", timestamp: 100 });
+  assert.equal(failed.status, AgentResultStatus.UNAVAILABLE);
+  assert.equal(sessionView.getHealth().status, AgentResultStatus.UNAVAILABLE);
+
+  // Inside the cooldown window: no probe even though Redis is back.
+  redis.failSet = false;
+  currentTime = 300;
+  const stillSuppressed = await sessionView.recordEvent({ canonicalName: "枇杷", timestamp: 300 });
+  assert.equal(stillSuppressed.status, AgentResultStatus.UNAVAILABLE);
+
+  // Past the cooldown: the operation re-probes and recovers.
+  currentTime = 700;
+  const recovered = await sessionView.recordEvent({ canonicalName: "枇杷", timestamp: 700 });
+  assert.equal(recovered.status, AgentResultStatus.AVAILABLE);
+  const health = sessionView.getHealth();
+  assert.equal(health.status, AgentResultStatus.AVAILABLE);
+  assert.equal(health.reason, null);
+  assert.equal(health.lastCheckedAt, 700);
+  await sessionView.close();
+});
+
+test("Redis session view getContext is read-only", async () => {
+  const redis = createFakeRedisClient();
+  const sessionView = createRedisSessionView({
+    client: redis,
+    keyPrefix: "bco:test",
+    ttlMs: 1000,
+    now: () => 100
+  });
+  await sessionView.ready;
+
+  await sessionView.recordEvent({ sessionId: "tab-1", canonicalName: "枇杷", timestamp: 100 });
+  const writesBefore = redis.setCalls.length;
+  await sessionView.getContext({ sessionId: "tab-1", timestamp: 200 });
+  await sessionView.getContext({ sessionId: "tab-1", timestamp: 300 });
+
+  assert.equal(redis.setCalls.length, writesBefore);
+  await sessionView.close();
+});
+
+test("Postgres write methods resolve to structured unavailable results on failure", async () => {
+  const pool = createFakePostgresPool();
+  const originalQuery = pool.query.bind(pool);
+  pool.query = async (sql, values) => {
+    if (String(sql).includes("INSERT INTO memory.explanation_versions")) {
+      throw new Error("connection reset");
+    }
+    return originalQuery(sql, values);
+  };
+  const client = createPostgresMemoryClient({
+    connectionString: "postgres://bco@localhost:5432/bco",
+    schema: "memory",
+    pool,
+    now: () => 9000
+  });
+  await client.ready;
+
+  const result = await client.writeExplanationVersion({ id: "ver_fail", target: "枇杷" });
+
+  assert.equal(result.status, AgentResultStatus.UNAVAILABLE);
+  assert.equal(result.reason, "layered_postgres_write_failed");
+  assert.equal(result.lastError, "connection reset");
+  await client.close();
+});
+
 function createFakePostgresPool() {
   const pool = {
     queries: [],

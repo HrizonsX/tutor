@@ -591,6 +591,47 @@ test("local gateway config API hot-updates embedding provider routing", async ()
   assert.equal(body.model, "second-embedding-model");
 });
 
+test("health capabilities reflect /config hot updates without restart", async () => {
+  const configState = createGatewayRuntimeConfigState({});
+  const runtime = createGatewayProviderRuntime({
+    configState,
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) })
+  });
+  const handler = createLocalGatewayHandler({
+    token: "secret",
+    providerRuntime: runtime,
+    runtimeConfigState: configState
+  });
+  const readHealth = () => handler({
+    method: "GET",
+    url: "http://127.0.0.1:17321/health",
+    headers: { "x-bco-pairing-token": "secret" }
+  }).then((response) => response.json());
+
+  const before = await readHealth();
+  await handler({
+    method: "POST",
+    url: "http://127.0.0.1:17321/config",
+    headers: { "content-type": "application/json", "x-bco-pairing-token": "secret" },
+    body: JSON.stringify({
+      config: {
+        explain: {
+          enabled: true,
+          provider: ProviderKind.CUSTOM,
+          adapter: ProviderAdapter.OPENAI_COMPATIBLE,
+          endpoint: "https://api.example/v1",
+          token: "explain-token",
+          modelName: "explain-model"
+        }
+      }
+    })
+  });
+  const after = await readHealth();
+
+  assert.equal(before.capabilities.explain, false);
+  assert.equal(after.capabilities.explain, true);
+});
+
 test("local gateway config API audits provider route changes without leaking secrets", async () => {
   const auditEvents = [];
   const configState = createGatewayRuntimeConfigState({

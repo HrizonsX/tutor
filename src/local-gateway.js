@@ -358,7 +358,10 @@ export function createLocalGatewayHandler({
     relationProposer: runtime?.proposeRelations ? (request) => runtime.proposeRelations(request) : null,
     relatedConceptHintProvider: runtime?.suggestRelatedConceptHints ? (request) => runtime.suggestRelatedConceptHints(request) : null
   });
-  const enabledCapabilities = {
+  // Computed per call, not frozen at construction: a /config hot update that
+  // enables a provider must be visible in the next /health response, or the
+  // extension keeps choosing the wrong streaming/fallback path.
+  const computeEnabledCapabilities = () => ({
     [AgentCapability.HEALTH]: true,
     [AgentCapability.EXPLAIN]: Boolean(explainHandler || runtime?.capabilities?.[AgentCapability.EXPLAIN]),
     [AgentCapability.STREAMING_EXPLANATION]: Boolean(runtime?.streamExplanation && runtime?.capabilities?.[AgentCapability.STREAMING_EXPLANATION]),
@@ -369,7 +372,7 @@ export function createLocalGatewayHandler({
     [AgentCapability.MEMORY_QUERY]: true,
     [AgentCapability.SOURCE_AWARE_EXPLANATION]: false,
     ...capabilities
-  };
+  });
 
   return async function handleLocalGatewayRequest(request = {}) {
     const method = request.method ?? "GET";
@@ -404,7 +407,7 @@ export function createLocalGatewayHandler({
         status: AgentResultStatus.AVAILABLE,
         mode: ProviderKind.LOCAL,
         protocolVersion: AgentProtocolVersion,
-        capabilities: enabledCapabilities,
+        capabilities: computeEnabledCapabilities(),
         providerRoles: runtime?.providerRoles ?? {},
         runtimeConfig: configState?.getDiagnosticsState?.() ?? null,
         memoryRepository,
@@ -480,7 +483,7 @@ export function createLocalGatewayHandler({
       if (runtime?.createEmbedding) {
         return jsonResponse(await runtime.createEmbedding(body));
       }
-      if (!enabledCapabilities[AgentCapability.EMBEDDING]) {
+      if (!computeEnabledCapabilities()[AgentCapability.EMBEDDING]) {
         return jsonResponse(unavailableCapability(AgentCapability.EMBEDDING));
       }
     }
