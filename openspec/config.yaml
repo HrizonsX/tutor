@@ -1,20 +1,36 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+# Shown to AI when creating openspec artifacts.
+context: |
+  Browser Cognitive Overlay: an MV3 extension (reading signals -> intervention
+  scoring -> explanation overlay) plus a local Node gateway on 127.0.0.1:17321
+  (durable learning memory, pre-recall relation discovery, all LLM provider
+  dispatch). Two trust domains, physically split: src/shared is the only
+  cross-domain import surface; src/extension and src/gateway never import
+  each other (enforced by test/module-boundaries.test.js).
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  Tech: plain ESM JavaScript, no build step, node:test only, JSDoc types
+  checked by tsc --checkJs. Runtime deps are exactly better-sqlite3/pg/redis,
+  each optional with fallbacks. The gateway HTTP layer stays thin; endpoint
+  behavior lives in local-agent-runtime, provider dispatch in
+  provider-runtime, store access behind memory-runtime.
+
+  Privacy red lines (binding for specs too): no provider/pairing tokens, raw
+  page text, or raw URLs in logs, diagnostics, fixtures, or spec examples.
+  Failures degrade to structured unavailable results with normalized reasons;
+  the learning ledger is append-only.
+
+  Archive ritual: when every task in a change is complete, the change moves
+  to openspec/changes/archive/YYYY-MM-DD-<name>/ and its delta requirements
+  are appended into openspec/specs/<capability>/spec.md. CI enforces this.
+
+rules:
+  proposal:
+    - Name every capability touched and mark it new or modified.
+    - State explicitly what does NOT change (compatibility surface).
+  tasks:
+    - Pair every behavior task with a test task in the same change.
+    - End with a verification section: npm run check green, then archive.
+  design:
+    - Record only decisions someone might reasonably reverse, with the reason
+      they should not.

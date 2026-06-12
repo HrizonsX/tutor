@@ -290,3 +290,14 @@ readable by web pages.
 The browser extension forwards immediate page context and interaction events to
 the local gateway. Durable memory, profile derivation, summarization, and
 provider request memory injection are owned by Gateway / Local Agent Runtime.
+
+## Engineering
+
+- [AGENTS.md](AGENTS.md) — the binding constitution for coding agents (and
+  humans): invariants, spec-driven workflow, testing rules, environment
+  gotchas. Start here before changing code.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — setup, commands, PR checklist, CI
+  overview.
+- [SECURITY.md](SECURITY.md) — threat model, privacy contract, reporting.
+- `openspec/specs/` — per-capability behavior contracts; changes flow through
+  `openspec/changes/` and are archived when complete (CI-enforced).
