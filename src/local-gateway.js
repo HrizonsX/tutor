@@ -1,346 +1,39 @@
 // @ts-nocheck
-import { DEFAULT_CONFIG } from "./config.js";
+// Thin HTTP boundary for the local gateway: authorization, request guards,
+// the route table, JSON serialization, HTTP status mapping, server lifecycle,
+// and redacted logging. Endpoint behavior lives in the Local Agent Runtime
+// (local-agent-runtime.js), provider dispatch in the Provider Runtime
+// (provider-runtime.js), and store access in the Memory Runtime
+// (memory-runtime.js).
 import {
   AgentCapability,
-  AgentProtocolVersion,
   AgentResultStatus,
-  MemoryRepositoryMode,
-  ProviderAdapter,
-  ProviderKind,
-  ProviderRole,
-  StreamEventType,
-  StreamLane,
-  StructuredOutputMode
+  StreamEventType
 } from "./contracts.js";
-import {
-  createLocalMemoryStore,
-  createPersistentLocalMemoryStore,
-  resolveDefaultLocalMemoryStorePath
-} from "./local-memory-store.js";
-import { createMemoryRepositoryFromRuntimeConfig } from "./memory-repository-factory.js";
-import { createProviderAdapterClient } from "./provider-adapters.js";
-import { isTimeoutError, withAbortTimeout } from "./async-control.js";
-import { normalizeRuntimeAdapter, normalizeRuntimeProviderMode } from "./runtime-config.js";
-import { createRuntimeExplainPipeline } from "./runtime-explain-pipeline.js";
+import { createLocalAgentRuntime } from "./local-agent-runtime.js";
 import { timingSafeEqual } from "node:crypto";
 import { inspect } from "node:util";
 
+// Compatibility exports: tests and scripts historically import these from the
+// gateway module. They re-export from the runtime modules that own them now.
 export {
   createLocalMemoryStore,
   createPersistentLocalMemoryStore,
   createMemoryRepositoryFromRuntimeConfig,
+  createMemoryRuntime,
   resolveDefaultLocalMemoryStorePath
-};
-
-export const DEFAULT_GATEWAY_PROVIDER_CONFIG = Object.freeze({
-  explain: {
-    enabled: false,
-    provider: ProviderKind.OFF,
-    adapter: ProviderAdapter.NONE,
-    endpoint: "",
-    token: "",
-    modelName: "",
-    chatPath: "/chat/completions",
-    structuredOutput: {
-      enabled: true,
-      mode: StructuredOutputMode.JSON_SCHEMA,
-      schemaName: "bco_explanation_result"
-    },
-    timeoutMs: 8000,
-    health: {
-      enabled: true,
-      cacheTtlMs: 30 * 1000
-    }
-  },
-  embedding: {
-    enabled: false,
-    provider: ProviderKind.OFF,
-    adapter: ProviderAdapter.NONE,
-    endpoint: "",
-    token: "",
-    modelName: "",
-    embeddingPath: "/embeddings",
-    timeoutMs: 8000,
-    health: {
-      enabled: true,
-      cacheTtlMs: 30 * 1000
-    }
-  },
-  relationProposer: {
-    enabled: false,
-    reuseExplainProvider: true,
-    provider: ProviderKind.OFF,
-    adapter: ProviderAdapter.NONE,
-    endpoint: "",
-    token: "",
-    modelName: "",
-    chatPath: "/chat/completions",
-    structuredOutput: {
-      enabled: true,
-      mode: StructuredOutputMode.JSON_SCHEMA,
-      schemaName: "bco_relation_proposal_result"
-    },
-    timeoutMs: 8000,
-    health: {
-      enabled: true,
-      cacheTtlMs: 30 * 1000
-    }
-  }
-});
-
-export function createGatewayRuntimeConfig({ env = globalThis.process?.env ?? {}, providerConfig = {} } = {}) {
-  const explain = mergeGatewayProviderRole(DEFAULT_GATEWAY_PROVIDER_CONFIG.explain, {
-      ...providerConfig.explain,
-      enabled: readBoolean(env.BCO_GATEWAY_EXPLAIN_ENABLED, providerConfig.explain?.enabled),
-      provider: env.BCO_GATEWAY_EXPLAIN_PROVIDER ?? providerConfig.explain?.provider,
-      adapter: env.BCO_GATEWAY_EXPLAIN_ADAPTER ?? providerConfig.explain?.adapter,
-      endpoint: env.BCO_GATEWAY_EXPLAIN_ENDPOINT ?? providerConfig.explain?.endpoint,
-      token: env.BCO_GATEWAY_EXPLAIN_TOKEN ?? providerConfig.explain?.token,
-      modelName: env.BCO_GATEWAY_EXPLAIN_MODEL ?? providerConfig.explain?.modelName,
-      chatPath: env.BCO_GATEWAY_EXPLAIN_CHAT_PATH ?? providerConfig.explain?.chatPath,
-      timeoutMs: readNumber(env.BCO_GATEWAY_EXPLAIN_TIMEOUT_MS, providerConfig.explain?.timeoutMs),
-      structuredOutput: {
-        ...providerConfig.explain?.structuredOutput,
-        mode: env.BCO_GATEWAY_EXPLAIN_STRUCTURED_OUTPUT ?? providerConfig.explain?.structuredOutput?.mode,
-        schemaName: env.BCO_GATEWAY_EXPLAIN_SCHEMA_NAME ?? providerConfig.explain?.structuredOutput?.schemaName
-      }
-    });
-  const embedding = mergeGatewayProviderRole(DEFAULT_GATEWAY_PROVIDER_CONFIG.embedding, {
-      ...providerConfig.embedding,
-      enabled: readBoolean(env.BCO_GATEWAY_EMBEDDING_ENABLED, providerConfig.embedding?.enabled),
-      provider: env.BCO_GATEWAY_EMBEDDING_PROVIDER ?? providerConfig.embedding?.provider,
-      adapter: env.BCO_GATEWAY_EMBEDDING_ADAPTER ?? providerConfig.embedding?.adapter,
-      endpoint: env.BCO_GATEWAY_EMBEDDING_ENDPOINT ?? providerConfig.embedding?.endpoint,
-      token: env.BCO_GATEWAY_EMBEDDING_TOKEN ?? providerConfig.embedding?.token,
-      modelName: env.BCO_GATEWAY_EMBEDDING_MODEL ?? providerConfig.embedding?.modelName,
-      embeddingPath: env.BCO_GATEWAY_EMBEDDING_PATH ?? providerConfig.embedding?.embeddingPath,
-      timeoutMs: readNumber(env.BCO_GATEWAY_EMBEDDING_TIMEOUT_MS, providerConfig.embedding?.timeoutMs)
-    });
-  const relationProposer = mergeGatewayProviderRole(DEFAULT_GATEWAY_PROVIDER_CONFIG.relationProposer, {
-      ...providerConfig.relationProposer,
-      enabled: readBoolean(
-        env.BCO_GATEWAY_RELATION_PROPOSER_ENABLED,
-        providerConfig.relationProposer?.enabled ?? Boolean(explain.enabled)
-      ),
-      reuseExplainProvider: readBoolean(
-        env.BCO_GATEWAY_RELATION_PROPOSER_REUSE_EXPLAIN,
-        providerConfig.relationProposer?.reuseExplainProvider
-      ),
-      provider: env.BCO_GATEWAY_RELATION_PROPOSER_PROVIDER ?? providerConfig.relationProposer?.provider,
-      adapter: env.BCO_GATEWAY_RELATION_PROPOSER_ADAPTER ?? providerConfig.relationProposer?.adapter,
-      endpoint: env.BCO_GATEWAY_RELATION_PROPOSER_ENDPOINT ?? providerConfig.relationProposer?.endpoint,
-      token: env.BCO_GATEWAY_RELATION_PROPOSER_TOKEN ?? providerConfig.relationProposer?.token,
-      modelName: env.BCO_GATEWAY_RELATION_PROPOSER_MODEL ?? providerConfig.relationProposer?.modelName,
-      chatPath: env.BCO_GATEWAY_RELATION_PROPOSER_CHAT_PATH ?? providerConfig.relationProposer?.chatPath,
-      timeoutMs: readNumber(env.BCO_GATEWAY_RELATION_PROPOSER_TIMEOUT_MS, providerConfig.relationProposer?.timeoutMs),
-      structuredOutput: {
-        ...providerConfig.relationProposer?.structuredOutput,
-        mode: env.BCO_GATEWAY_RELATION_PROPOSER_STRUCTURED_OUTPUT ?? providerConfig.relationProposer?.structuredOutput?.mode,
-        schemaName: env.BCO_GATEWAY_RELATION_PROPOSER_SCHEMA_NAME ?? providerConfig.relationProposer?.structuredOutput?.schemaName
-      }
-    });
-  return {
-    explain,
-    embedding,
-    relationProposer
-  };
-}
-
-export function createGatewayProviderRuntime({
-  providerConfig = createGatewayRuntimeConfig(),
-  configState = null,
-  fetchImpl = globalThis.fetch,
-  logger = null,
-  now = () => Date.now(),
-  config = DEFAULT_CONFIG
-} = {}) {
-  const staticRuntimeConfig = createGatewayRuntimeConfig({ providerConfig });
-  const getRuntimeConfig = () => configState?.getEffectiveConfig?.() ?? staticRuntimeConfig;
-
-  async function explain(request = {}) {
-    return dispatchChat(request, AgentCapability.EXPLAIN);
-  }
-
-  async function rewrite(request = {}) {
-    return dispatchChat(request, AgentCapability.REWRITE);
-  }
-
-  async function streamExplanation(request = {}, options = {}) {
-    const runtimeConfig = getRuntimeConfig();
-    const provider = buildRuntimeProvider(runtimeConfig.explain, ProviderRole.EXPLAIN, AgentCapability.EXPLAIN);
-    const unavailable = validateRuntimeProvider(provider, AgentCapability.EXPLAIN);
-    if (unavailable) return unavailable;
-    const adapterClient = createProviderAdapterClient({
-      provider,
-      fetchImpl,
-      token: provider.token,
-      config,
-      now,
-      logger
-    });
-    if (!adapterClient?.streamExplanation) {
-      return unavailableRuntimeProvider("provider_adapter_unconfigured", AgentCapability.EXPLAIN, provider);
-    }
-    try {
-      return await withAbortTimeout(
-        (signal) => adapterClient.streamExplanation(request, { ...options, signal }),
-        { timeoutMs: provider.timeoutMs, reason: "agent_timeout", parentSignal: options.signal ?? null }
-      );
-    } catch (error) {
-      return unavailableRuntimeProvider(
-        isTimeoutError(error, "agent_timeout") ? "agent_timeout" : "provider_unavailable",
-        AgentCapability.EXPLAIN,
-        provider
-      );
-    }
-  }
-
-  async function suggestRelatedConceptHints(request = {}) {
-    const runtimeConfig = getRuntimeConfig();
-    const provider = buildRuntimeProvider(runtimeConfig.explain, ProviderRole.EXPLAIN, AgentCapability.EXPLAIN);
-    const unavailable = validateRuntimeProvider(provider, AgentCapability.EXPLAIN);
-    if (unavailable) return unavailable;
-    const adapterClient = createProviderAdapterClient({
-      provider,
-      fetchImpl,
-      token: provider.token,
-      config,
-      now,
-      logger
-    });
-    if (!adapterClient?.suggestRelatedConceptHints) {
-      return unavailableRuntimeProvider("provider_adapter_unconfigured", AgentCapability.EXPLAIN, provider);
-    }
-    try {
-      return await withAbortTimeout(
-        (signal) => adapterClient.suggestRelatedConceptHints(request, { signal }),
-        { timeoutMs: provider.timeoutMs, reason: "agent_timeout" }
-      );
-    } catch (error) {
-      return unavailableRuntimeProvider(
-        isTimeoutError(error, "agent_timeout") ? "agent_timeout" : "provider_unavailable",
-        AgentCapability.EXPLAIN,
-        provider
-      );
-    }
-  }
-
-  async function createEmbedding(payload = {}) {
-    const runtimeConfig = getRuntimeConfig();
-    const provider = buildRuntimeProvider(runtimeConfig.embedding, ProviderRole.EMBEDDING, AgentCapability.EMBEDDING);
-    const unavailable = validateRuntimeProvider(provider, AgentCapability.EMBEDDING);
-    if (unavailable) return unavailable;
-    const adapterClient = createProviderAdapterClient({
-      provider,
-      fetchImpl,
-      token: provider.token,
-      config,
-      now,
-      logger
-    });
-    if (!adapterClient?.createEmbedding) {
-      return unavailableRuntimeProvider("provider_adapter_unconfigured", AgentCapability.EMBEDDING, provider, { vector: null });
-    }
-    try {
-      return await withAbortTimeout(
-        (signal) => adapterClient.createEmbedding(payload, { signal }),
-        { timeoutMs: provider.timeoutMs, reason: "embedding_timeout" }
-      );
-    } catch (error) {
-      return unavailableRuntimeProvider(
-        isTimeoutError(error, "embedding_timeout") ? "embedding_timeout" : "provider_unavailable",
-        AgentCapability.EMBEDDING,
-        provider,
-        { vector: null }
-      );
-    }
-  }
-
-  async function proposeRelations(request = {}) {
-    const runtimeConfig = getRuntimeConfig();
-    const roleConfig = resolveRelationProposerRoleConfig(runtimeConfig);
-    const provider = buildRuntimeProvider(roleConfig, ProviderRole.RELATION_PROPOSER, AgentCapability.RELATION_PROPOSAL);
-    const unavailable = validateRuntimeProvider(provider, AgentCapability.RELATION_PROPOSAL);
-    if (unavailable) return unavailable;
-    const adapterClient = createProviderAdapterClient({
-      provider,
-      fetchImpl,
-      token: provider.token,
-      config,
-      now,
-      logger
-    });
-    if (!adapterClient?.proposeRelations) {
-      return unavailableRuntimeProvider("provider_adapter_unconfigured", AgentCapability.RELATION_PROPOSAL, provider);
-    }
-    try {
-      return await withAbortTimeout(
-        (signal) => adapterClient.proposeRelations(request, { signal }),
-        { timeoutMs: provider.timeoutMs, reason: "relation_proposer_timeout" }
-      );
-    } catch (error) {
-      return unavailableRuntimeProvider(
-        isTimeoutError(error, "relation_proposer_timeout") ? "relation_proposer_timeout" : "provider_unavailable",
-        AgentCapability.RELATION_PROPOSAL,
-        provider
-      );
-    }
-  }
-
-  async function dispatchChat(request, capabilityKind) {
-    const runtimeConfig = getRuntimeConfig();
-    const provider = buildRuntimeProvider(runtimeConfig.explain, ProviderRole.EXPLAIN, capabilityKind);
-    const unavailable = validateRuntimeProvider(provider, capabilityKind);
-    if (unavailable) return unavailable;
-    const adapterClient = createProviderAdapterClient({
-      provider,
-      fetchImpl,
-      token: provider.token,
-      config,
-      now,
-      logger
-    });
-    const method = capabilityKind === AgentCapability.REWRITE ? adapterClient?.rewrite : adapterClient?.explain;
-    if (!method) {
-      return unavailableRuntimeProvider("provider_adapter_unconfigured", capabilityKind, provider);
-    }
-    try {
-      return await withAbortTimeout(
-        (signal) => method.call(adapterClient, request, { signal }),
-        { timeoutMs: provider.timeoutMs, reason: "agent_timeout" }
-      );
-    } catch (error) {
-      return unavailableRuntimeProvider(
-        isTimeoutError(error, "agent_timeout") ? "agent_timeout" : "provider_unavailable",
-        capabilityKind,
-        provider
-      );
-    }
-  }
-
-  return {
-    explain,
-    rewrite,
-    streamExplanation,
-    suggestRelatedConceptHints,
-    createEmbedding,
-    proposeRelations,
-    configState,
-    get capabilities() {
-      return createRuntimeCapabilities(getRuntimeConfig());
-    },
-    get providerRoles() {
-      return createRuntimeProviderRoleState(getRuntimeConfig());
-    }
-  };
-}
+} from "./memory-runtime.js";
+export { createGatewayProviderRuntime } from "./provider-runtime.js";
+export { createLocalAgentRuntime } from "./local-agent-runtime.js";
+export { DEFAULT_GATEWAY_PROVIDER_CONFIG, createGatewayRuntimeConfig } from "./runtime-config.js";
 
 export function createLocalGatewayHandler({
   token = "",
   allowUnauthenticated = false,
   maxBodyBytes = DEFAULT_MAX_REQUEST_BODY_BYTES,
   allowedOrigins = [],
-  store = createLocalMemoryStore(),
+  agentRuntime = null,
+  store = undefined,
   capabilities = {},
   explainHandler = null,
   rewriteHandler = null,
@@ -350,28 +43,18 @@ export function createLocalGatewayHandler({
   onProviderRouteChange = null,
   now = () => Date.now()
 } = {}) {
-  const runtime = providerRuntime;
-  const configState = runtimeConfigState ?? runtime?.configState ?? null;
-  const explainPipeline = createRuntimeExplainPipeline({
+  // Compatibility shim: the historical signature passes the store and
+  // provider pieces directly. Assemble a Local Agent Runtime from them when
+  // the caller does not provide one.
+  const runtime = agentRuntime ?? createLocalAgentRuntime({
     store,
-    now,
-    relationProposer: runtime?.proposeRelations ? (request) => runtime.proposeRelations(request) : null,
-    relatedConceptHintProvider: runtime?.suggestRelatedConceptHints ? (request) => runtime.suggestRelatedConceptHints(request) : null
-  });
-  // Computed per call, not frozen at construction: a /config hot update that
-  // enables a provider must be visible in the next /health response, or the
-  // extension keeps choosing the wrong streaming/fallback path.
-  const computeEnabledCapabilities = () => ({
-    [AgentCapability.HEALTH]: true,
-    [AgentCapability.EXPLAIN]: Boolean(explainHandler || runtime?.capabilities?.[AgentCapability.EXPLAIN]),
-    [AgentCapability.STREAMING_EXPLANATION]: Boolean(runtime?.streamExplanation && runtime?.capabilities?.[AgentCapability.STREAMING_EXPLANATION]),
-    [AgentCapability.REWRITE]: Boolean(rewriteHandler || runtime?.capabilities?.[AgentCapability.REWRITE]),
-    [AgentCapability.EMBEDDING]: Boolean(embeddingHandler || runtime?.capabilities?.[AgentCapability.EMBEDDING]),
-    [AgentCapability.RELATION_PROPOSAL]: Boolean(runtime?.capabilities?.[AgentCapability.RELATION_PROPOSAL]),
-    [AgentCapability.MEMORY_EVENT_WRITE]: true,
-    [AgentCapability.MEMORY_QUERY]: true,
-    [AgentCapability.SOURCE_AWARE_EXPLANATION]: false,
-    ...capabilities
+    capabilities,
+    explainHandler,
+    rewriteHandler,
+    embeddingHandler,
+    providerRuntime,
+    runtimeConfigState,
+    now
   });
 
   return async function handleLocalGatewayRequest(request = {}) {
@@ -394,32 +77,15 @@ export function createLocalGatewayHandler({
     }
 
     if (path === "/health") {
-      const memoryRepository = typeof store.getHealth === "function"
-        ? store.getHealth()
-        : {
-            mode: MemoryRepositoryMode.LOCAL_GATEWAY,
-            status: "available",
-            shared: true,
-            persistent: false,
-            storeMode: "memory"
-          };
-      return jsonResponse({
-        status: AgentResultStatus.AVAILABLE,
-        mode: ProviderKind.LOCAL,
-        protocolVersion: AgentProtocolVersion,
-        capabilities: computeEnabledCapabilities(),
-        providerRoles: runtime?.providerRoles ?? {},
-        runtimeConfig: configState?.getDiagnosticsState?.() ?? null,
-        memoryRepository,
-        checkedAt: now()
-      });
+      return jsonResponse(runtime.getHealth());
     }
 
     if (path === "/config" && method === "GET") {
-      if (!configState?.read) {
+      const config = runtime.readConfig();
+      if (config === null) {
         return jsonResponse({ status: AgentResultStatus.UNAVAILABLE, reason: "runtime_config_unavailable" }, 503);
       }
-      return jsonResponse(configState.read());
+      return jsonResponse(config);
     }
 
     if (method !== "POST") {
@@ -428,173 +94,41 @@ export function createLocalGatewayHandler({
 
     const body = await readBody(request);
     if (path === "/config") {
-      if (!configState?.update) {
+      const result = runtime.updateConfig(body);
+      if (result === null) {
         return jsonResponse({ status: AgentResultStatus.UNAVAILABLE, reason: "runtime_config_unavailable" }, 503);
       }
-      const result = configState.update(body?.config ?? body ?? {});
-      if (result.status === AgentResultStatus.AVAILABLE && result.appliedPaths?.some((path) => path.startsWith("memory.cognitive."))) {
-        const effective = configState.getEffectiveConfig?.();
-        store.updateConfig?.({ memory: effective?.memory ?? {} });
-      }
-      notifyProviderRouteChange(onProviderRouteChange, result, configState);
+      notifyProviderRouteChange(onProviderRouteChange, result, runtime.runtimeConfigState);
       return jsonResponse(result, result.status === AgentResultStatus.INVALID ? 400 : 200);
     }
     if (path === "/explain") {
-      return jsonResponse(await explainPipeline.handle({
-        request: body,
-        capabilityKind: AgentCapability.EXPLAIN,
-        providerAvailable: Boolean(explainHandler || runtime?.explain),
-        providerCall: explainHandler
-          ? (requestWithMemory) => explainHandler(requestWithMemory)
-          : runtime?.explain
-            ? (requestWithMemory) => runtime.explain(requestWithMemory)
-            : null
-      }));
+      return jsonResponse(await runtime.explain(body));
     }
     if (path === "/explain/stream-session") {
-      return jsonLineStreamResponse(explainPipeline.streamSession({
-        request: body,
-        signal: request.signal ?? null,
-        providerAvailable: Boolean(runtime?.streamExplanation),
-        directProviderStream: runtime?.streamExplanation
-          ? (requestWithLane, options) => runtime.streamExplanation(requestWithLane, { ...options, lane: StreamLane.DIRECT })
-          : null,
-        associationProviderStream: runtime?.streamExplanation
-          ? (requestWithLane, options) => runtime.streamExplanation(requestWithLane, { ...options, lane: StreamLane.ASSOCIATION })
-          : null
-      }));
+      return jsonLineStreamResponse(runtime.streamExplainSession(body, { signal: request.signal ?? null }));
     }
     if (path === "/rewrite") {
-      return jsonResponse(await explainPipeline.handle({
-        request: body,
-        capabilityKind: AgentCapability.REWRITE,
-        providerAvailable: Boolean(rewriteHandler || runtime?.rewrite),
-        providerCall: rewriteHandler
-          ? (requestWithMemory) => rewriteHandler(requestWithMemory)
-          : runtime?.rewrite
-            ? (requestWithMemory) => runtime.rewrite(requestWithMemory)
-            : null
-      }));
+      return jsonResponse(await runtime.rewrite(body));
     }
     if (path === "/embedding") {
-      if (embeddingHandler) {
-        return jsonResponse(await embeddingHandler(body));
-      }
-      if (runtime?.createEmbedding) {
+      if (runtime.hasEmbeddingProvider()) {
         return jsonResponse(await runtime.createEmbedding(body));
       }
-      if (!computeEnabledCapabilities()[AgentCapability.EMBEDDING]) {
+      if (!runtime.capabilities[AgentCapability.EMBEDDING]) {
         return jsonResponse(unavailableCapability(AgentCapability.EMBEDDING));
       }
     }
     if (path === "/memory/events") {
-      const eventPayloads = normalizeMemoryEventPayloads(body);
-      const storedEvents = [];
-      for (const eventPayload of eventPayloads) {
-        const stored = await store.writeEvent(eventPayload);
-        if (stored?.status === AgentResultStatus.UNAVAILABLE) {
-          return jsonResponse(stored, 503);
-        }
-        storedEvents.push(stored);
-      }
-      return jsonResponse({
-        status: AgentResultStatus.AVAILABLE,
-        capabilityKind: AgentCapability.MEMORY_EVENT_WRITE,
-        mode: MemoryRepositoryMode.LOCAL_GATEWAY,
-        shared: true,
-        repositoryStatus: "local_gateway",
-        memoryRepository: typeof store.getHealth === "function" ? store.getHealth() : null,
-        event: storedEvents[0] ?? null,
-        events: storedEvents,
-        eventCount: storedEvents.length
-      });
+      const result = await runtime.writeMemoryEvents(body);
+      return jsonResponse(result, result?.status === AgentResultStatus.UNAVAILABLE ? 503 : 200);
     }
     if (path === "/memory/query") {
-      const memoryPacket = await store.queryMemory(body);
-      if (memoryPacket?.status === AgentResultStatus.UNAVAILABLE) {
-        return jsonResponse(memoryPacket, 503);
-      }
-      return jsonResponse({
-        status: AgentResultStatus.AVAILABLE,
-        capabilityKind: AgentCapability.MEMORY_QUERY,
-        mode: MemoryRepositoryMode.LOCAL_GATEWAY,
-        shared: true,
-        repositoryStatus: memoryPacket.repositoryStatus ?? "local_gateway",
-        memoryRepository: typeof store.getHealth === "function" ? store.getHealth() : null,
-        memoryPacket
-      });
+      const result = await runtime.queryMemory(body);
+      return jsonResponse(result, result?.status === AgentResultStatus.UNAVAILABLE ? 503 : 200);
     }
 
     return jsonResponse({ status: AgentResultStatus.UNAVAILABLE, reason: "provider_capability_unsupported" }, 404);
   };
-}
-
-async function injectRuntimeMemory(request = {}, { store, capabilityKind, now = () => Date.now() } = {}) {
-  const statelessRequest = stripBrowserMemoryFields(request);
-  if (!store?.queryMemory) return statelessRequest;
-  const target = statelessRequest.target ?? {};
-  const canonicalName = target.canonicalName ?? target.target ?? statelessRequest.targetObject?.canonicalName ?? "";
-  if (!canonicalName) return statelessRequest;
-  const memoryPacket = await store.queryMemory({
-    canonicalName,
-    candidate: target,
-    timestamp: statelessRequest.timestamp ?? now()
-  });
-  if (memoryPacket?.status === AgentResultStatus.UNAVAILABLE) {
-    return {
-      ...statelessRequest,
-      constraints: {
-        ...(statelessRequest.constraints ?? {}),
-        memoryStatus: memoryPacket.reason ?? "local_gateway_degraded"
-      }
-    };
-  }
-  return {
-    ...statelessRequest,
-    capabilityKind: statelessRequest.capabilityKind ?? capabilityKind,
-    memoryPacket,
-    memorySummary: memoryPacket.agentSummary ?? {},
-    profileHints: memoryPacket.profileHints ?? {},
-    constraints: {
-      ...(statelessRequest.constraints ?? {}),
-      memoryStatus: memoryPacket.repositoryStatus ?? memoryPacket.memoryFreshness?.status ?? "local_gateway"
-    }
-  };
-}
-
-function stripBrowserMemoryFields(request = {}) {
-  const {
-    memoryPacket: _memoryPacket,
-    memorySummary: _memorySummary,
-    profileHints: _profileHints,
-    priorExplanations: _priorExplanations,
-    feedbackEvents: _feedbackEvents,
-    feedbackHistory: _feedbackHistory,
-    conceptFamiliarity: _conceptFamiliarity,
-    derivedSummaries: _derivedSummaries,
-    preferenceSummaries: _preferenceSummaries,
-    conceptProjection: _conceptProjection,
-    conceptProjections: _conceptProjections,
-    dailySummary: _dailySummary,
-    dailySummaries: _dailySummaries,
-    memoryBridges: _memoryBridges,
-    relationProposals: _relationProposals,
-    relationCandidates: _relationCandidates,
-    reportContext: _reportContext,
-    reflectionReport: _reflectionReport,
-    ...statelessRequest
-  } = request;
-  return statelessRequest;
-}
-
-function normalizeMemoryEventPayloads(body = {}) {
-  if (!Array.isArray(body?.events)) return [body];
-  return body.events
-    .map((entry) => ({
-      repository: entry?.repository ?? body.repository ?? "learning",
-      event: entry?.event ?? entry
-    }))
-    .filter((entry) => entry.event);
 }
 
 export async function startLocalGatewayServer({
@@ -722,183 +256,11 @@ export async function startLocalGatewayServer({
   return server;
 }
 
-function mergeGatewayProviderRole(base = {}, override = {}) {
-  return {
-    ...base,
-    ...removeUndefined(override),
-    structuredOutput: {
-      ...(base.structuredOutput ?? {}),
-      ...removeUndefined(override.structuredOutput ?? {})
-    },
-    health: {
-      ...(base.health ?? {}),
-      ...removeUndefined(override.health ?? {})
-    }
-  };
-}
-
-function removeUndefined(value = {}) {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
-}
-
-function readBoolean(value, fallback) {
-  if (value === undefined || value === null || value === "") return fallback;
-  return value === true || String(value).toLowerCase() === "true";
-}
-
-function readNumber(value, fallback) {
-  if (value === undefined || value === null || value === "") return fallback;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function buildRuntimeProvider(roleConfig = {}, role = ProviderRole.EXPLAIN, capability = AgentCapability.EXPLAIN) {
-  return {
-    role,
-    mode: normalizeRuntimeProviderMode(roleConfig.provider),
-    capability,
-    adapter: normalizeRuntimeAdapter(roleConfig.adapter),
-    endpoint: roleConfig.endpoint ?? "",
-    token: roleConfig.token ?? "",
-    modelName: roleConfig.modelName ?? "",
-    chatPath: roleConfig.chatPath ?? "",
-    embeddingPath: roleConfig.embeddingPath ?? "",
-    structuredOutput: { ...(roleConfig.structuredOutput ?? {}) },
-    timeoutMs: roleConfig.timeoutMs ?? 8000,
-    enabled: Boolean(roleConfig.enabled)
-  };
-}
-
-function resolveRelationProposerRoleConfig(runtimeConfig = {}) {
-  const relationConfig = mergeGatewayProviderRole(
-    DEFAULT_GATEWAY_PROVIDER_CONFIG.relationProposer,
-    runtimeConfig.relationProposer ?? {}
-  );
-  if (!relationConfig.reuseExplainProvider) return relationConfig;
-  const explainConfig = mergeGatewayProviderRole(DEFAULT_GATEWAY_PROVIDER_CONFIG.explain, runtimeConfig.explain ?? {});
-  return mergeGatewayProviderRole(explainConfig, {
-    enabled: Boolean(relationConfig.enabled && explainConfig.enabled),
-    reuseExplainProvider: true,
-    structuredOutput: relationConfig.structuredOutput ?? DEFAULT_GATEWAY_PROVIDER_CONFIG.relationProposer.structuredOutput,
-    timeoutMs: relationConfig.timeoutMs ?? explainConfig.timeoutMs,
-    health: relationConfig.health ?? explainConfig.health
-  });
-}
-
-function validateRuntimeProvider(provider, capabilityKind) {
-  if (!provider.enabled || provider.mode === ProviderKind.OFF) {
-    const reason = provider.role === ProviderRole.EMBEDDING
-      ? "embedding_provider_disabled"
-      : provider.role === ProviderRole.RELATION_PROPOSER
-        ? "relation_proposer_disabled"
-        : "explain_provider_off";
-    return unavailableRuntimeProvider(reason, capabilityKind, provider, provider.role === ProviderRole.EMBEDDING ? { vector: null } : {});
-  }
-  if (!provider.endpoint) {
-    const reason = provider.role === ProviderRole.EMBEDDING
-      ? "embedding_endpoint_unconfigured"
-      : provider.role === ProviderRole.RELATION_PROPOSER
-        ? "relation_proposer_endpoint_unconfigured"
-        : "explain_endpoint_unconfigured";
-    return unavailableRuntimeProvider(reason, capabilityKind, provider, provider.role === ProviderRole.EMBEDDING ? { vector: null } : {});
-  }
-  if (!provider.adapter) {
-    return unavailableRuntimeProvider("provider_adapter_unconfigured", capabilityKind, provider, provider.role === ProviderRole.EMBEDDING ? { vector: null } : {});
-  }
-  if (provider.adapter === ProviderAdapter.OPENAI_COMPATIBLE) {
-    if ((capabilityKind === AgentCapability.EXPLAIN || capabilityKind === AgentCapability.REWRITE || capabilityKind === AgentCapability.RELATION_PROPOSAL) && !provider.chatPath) {
-      const reason = capabilityKind === AgentCapability.RELATION_PROPOSAL
-        ? "relation_proposer_chat_path_unconfigured"
-        : "explain_chat_path_unconfigured";
-      return unavailableRuntimeProvider(reason, capabilityKind, provider);
-    }
-    if (capabilityKind === AgentCapability.EMBEDDING && !provider.embeddingPath) {
-      return unavailableRuntimeProvider("embedding_path_unconfigured", capabilityKind, provider, { vector: null });
-    }
-    const mode = provider.structuredOutput?.mode ?? StructuredOutputMode.PROMPT_JSON;
-    if ((provider.role === ProviderRole.EXPLAIN || provider.role === ProviderRole.RELATION_PROPOSER) && !Object.values(StructuredOutputMode).includes(mode)) {
-      return unavailableRuntimeProvider("provider_model_unsupported", capabilityKind, provider);
-    }
-  }
-  return null;
-}
-
-function createRuntimeCapabilities(runtimeConfig = {}) {
-  return {
-    [AgentCapability.EXPLAIN]: isRuntimeRoleAvailable(runtimeConfig.explain, AgentCapability.EXPLAIN),
-    [AgentCapability.STREAMING_EXPLANATION]: isRuntimeRoleAvailable(runtimeConfig.explain, AgentCapability.EXPLAIN),
-    [AgentCapability.REWRITE]: isRuntimeRoleAvailable(runtimeConfig.explain, AgentCapability.REWRITE),
-    [AgentCapability.EMBEDDING]: isRuntimeRoleAvailable(runtimeConfig.embedding, AgentCapability.EMBEDDING),
-    [AgentCapability.RELATION_PROPOSAL]: isRuntimeRoleAvailable(
-      resolveRelationProposerRoleConfig(runtimeConfig),
-      AgentCapability.RELATION_PROPOSAL
-    )
-  };
-}
-
-function isRuntimeRoleAvailable(roleConfig = {}, capabilityKind) {
-  const role = capabilityKind === AgentCapability.EMBEDDING
-    ? ProviderRole.EMBEDDING
-    : capabilityKind === AgentCapability.RELATION_PROPOSAL
-      ? ProviderRole.RELATION_PROPOSER
-      : ProviderRole.EXPLAIN;
-  const provider = buildRuntimeProvider(roleConfig, role, capabilityKind);
-  return !validateRuntimeProvider(provider, capabilityKind);
-}
-
-function createRuntimeProviderRoleState(runtimeConfig = {}) {
-  return {
-    [ProviderRole.EXPLAIN]: runtimeRoleState(runtimeConfig.explain, ProviderRole.EXPLAIN),
-    [ProviderRole.EMBEDDING]: runtimeRoleState(runtimeConfig.embedding, ProviderRole.EMBEDDING),
-    [ProviderRole.RELATION_PROPOSER]: runtimeRoleState(
-      resolveRelationProposerRoleConfig(runtimeConfig),
-      ProviderRole.RELATION_PROPOSER
-    )
-  };
-}
-
-function runtimeRoleState(roleConfig = {}, role = ProviderRole.EXPLAIN) {
-  const provider = buildRuntimeProvider(roleConfig, role, role === ProviderRole.EMBEDDING
-    ? AgentCapability.EMBEDDING
-    : role === ProviderRole.RELATION_PROPOSER
-      ? AgentCapability.RELATION_PROPOSAL
-      : AgentCapability.EXPLAIN);
-  return {
-    role,
-    enabled: provider.enabled,
-    mode: provider.mode,
-    adapter: provider.adapter,
-    endpoint: redactUrlForLog(provider.endpoint),
-    chatPath: redactUrlForLog(provider.chatPath),
-    embeddingPath: redactUrlForLog(provider.embeddingPath),
-    structuredOutput: { ...(provider.structuredOutput ?? {}) },
-    modelName: provider.modelName,
-    tokenPresent: Boolean(provider.token),
-    timeoutMs: provider.timeoutMs,
-    reuseExplainProvider: Boolean(roleConfig.reuseExplainProvider),
-    health: { ...(roleConfig.health ?? {}) }
-  };
-}
-
 function unavailableCapability(capabilityKind) {
   return {
     status: AgentResultStatus.UNAVAILABLE,
     reason: "provider_capability_unsupported",
     capabilityKind
-  };
-}
-
-function unavailableRuntimeProvider(reason, capabilityKind, provider = {}, extra = {}) {
-  return {
-    status: AgentResultStatus.UNAVAILABLE,
-    reason,
-    unavailableReason: reason,
-    capabilityKind,
-    providerRole: provider.role ?? null,
-    providerMode: provider.mode ?? null,
-    adapter: provider.adapter ?? null,
-    modelName: provider.modelName ?? null,
-    ...extra
   };
 }
 
@@ -920,8 +282,8 @@ function constantTimeEquals(left, right) {
 
 export const DEFAULT_MAX_REQUEST_BODY_BYTES = 1024 * 1024;
 
-// Request guards below are intentionally small composable functions so the
-// gateway split (P8) can move them into the thin HTTP layer unchanged.
+// Request guards are small composable functions owned by this thin HTTP
+// layer; they run after authorization and before route dispatch.
 export function isAllowedGatewayOrigin(origin, allowedOrigins = []) {
   if (origin === undefined || origin === null || origin === "") return true;
   const value = String(origin);
@@ -1296,4 +658,3 @@ function redactUrlForLog(value = "") {
     return String(value).replace(/([?&][^=]*(?:token|secret|key|authorization)[^=]*=)[^&]*/gi, "$1<redacted>");
   }
 }
-

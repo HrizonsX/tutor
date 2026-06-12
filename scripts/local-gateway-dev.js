@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 import {
-  createGatewayProviderRuntime,
-  createGatewayRuntimeConfig,
   createLocalGatewayHandler,
-  createLocalMemoryStore,
-  createMemoryRepositoryFromRuntimeConfig,
   createProviderRouteChangeAuditLogger,
-  resolveDefaultLocalMemoryStorePath,
   startLocalGatewayServer
 } from "../src/local-gateway.js";
+import {
+  createLocalMemoryStore,
+  createMemoryRepositoryFromRuntimeConfig,
+  createMemoryRuntime,
+  resolveDefaultLocalMemoryStorePath
+} from "../src/memory-runtime.js";
+import { createGatewayProviderRuntime } from "../src/provider-runtime.js";
+import { createLocalAgentRuntime } from "../src/local-agent-runtime.js";
+import { createGatewayRuntimeConfig } from "../src/runtime-config.js";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -53,13 +57,20 @@ const providerRuntime = useStubExplain
     logger: console
   });
 
-const handler = createLocalGatewayHandler({
-  token,
-  store,
-  explainHandler: useStubExplain ? explainWithDevStub : null,
-  rewriteHandler: useStubExplain ? explainWithDevStub : null,
+// Explicit runtime assembly: memory facade over the store, provider runtime,
+// and the local agent runtime the gateway handler delegates to.
+const memoryRuntime = createMemoryRuntime({ store });
+const agentRuntime = createLocalAgentRuntime({
+  memoryRuntime,
   providerRuntime,
   runtimeConfigState: configState,
+  explainHandler: useStubExplain ? explainWithDevStub : null,
+  rewriteHandler: useStubExplain ? explainWithDevStub : null
+});
+
+const handler = createLocalGatewayHandler({
+  token,
+  agentRuntime,
   onProviderRouteChange: createProviderRouteChangeAuditLogger(console)
 });
 
