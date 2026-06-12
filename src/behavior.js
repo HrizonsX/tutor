@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { DEFAULT_CONFIG } from "./config.js";
 import { FragmentType } from "./contracts.js";
 import { looksLikeCodeSelection, validateSelectedConcept } from "./concepts.js";

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { clampText } from "./privacy.js";
 import { FactSensitivity, FragmentType, KnowledgeType } from "./contracts.js";
 

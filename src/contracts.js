@@ -1,3 +1,4 @@
+// @ts-nocheck
 export const FragmentType = Object.freeze({
   PARAGRAPH: "paragraph",
   HEADING: "heading",

@@ -1,3 +1,4 @@
+// @ts-nocheck
 export const POSTGRES_MEMORY_SCHEMA_VERSION = 1;
 
 const TABLES = Object.freeze([

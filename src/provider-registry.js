@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { DEFAULT_CONFIG } from "./config.js";
 import {
   AgentCapability,

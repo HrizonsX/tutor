@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { FragmentType } from "./contracts.js";
 import { hashString } from "./privacy.js";
 

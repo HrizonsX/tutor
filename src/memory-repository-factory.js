@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createLocalMemoryStore, createPersistentLocalMemoryStore } from "./local-memory-store.js";
 import { normalizeKnowledgeObjectName } from "./concepts.js";
 import { AgentResultStatus, MemoryEventType } from "./contracts.js";

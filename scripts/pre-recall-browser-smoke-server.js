@@ -105,7 +105,11 @@ const runtime = {
 const gatewayHandler = createLocalGatewayHandler({
   store,
   providerRuntime: runtime,
-  now: () => currentTime
+  now: () => currentTime,
+  // This harness serves its own trusted page from the same origin, so the
+  // unauthenticated and origin escapes are deliberate and local-only.
+  allowUnauthenticated: true,
+  allowedOrigins: [`http://${host}:${port}`]
 });
 
 const page = `<!doctype html>

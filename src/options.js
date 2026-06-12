@@ -1,3 +1,4 @@
+// @ts-nocheck
 import {
   AgentCapability,
   AgentResultStatus,
@@ -316,7 +317,8 @@ function formatProviderSummary(mode, modelName = "") {
 function formatUnavailableReason(reason = "") {
   const normalized = String(reason);
   if (normalized.includes("unreachable")) return "离线 (网关不可达)";
-  if (normalized.includes("pairing")) return "降级 (配对待确认)";
+  if (normalized.includes("pairing_required")) return "未配对 (请在下方填写配对 token)";
+  if (normalized.includes("pairing")) return "未配对 (配对 token 被网关拒绝)";
   if (normalized.includes("timeout")) return "降级 (请求超时)";
   if (normalized.includes("unsupported")) return "降级 (能力受限)";
   return "降级";

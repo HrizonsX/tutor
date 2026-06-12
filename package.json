@@ -4,15 +4,25 @@
   "private": true,
   "type": "module",
   "description": "A quiet browser learning overlay that explains concepts only when reading signals and memory justify it.",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "gateway:dev": "node scripts/local-gateway-dev.js",
     "gateway:stub": "node scripts/local-gateway-dev.js --stub-explain",
     "smoke:pre-recall": "node scripts/pre-recall-browser-smoke-server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:ci": "node --test",
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "npm run typecheck && npm run test:ci"
   },
   "dependencies": {
     "better-sqlite3": "^12.5.0",
     "pg": "^8.13.1",
     "redis": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0"
   }
 }

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { AgentResultStatus, MemoryRepositoryMode } from "./contracts.js";
 
 export function createLocalGatewayMemoryRepository({ gatewayClient }) {

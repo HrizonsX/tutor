@@ -23,7 +23,29 @@ npm run gateway:dev
 ```
 
 This starts the local gateway on `http://127.0.0.1:17321` with health and
-memory endpoints. To smoke-test overlay rendering without wiring a real Agent
+memory endpoints.
+
+### Pairing the extension with the gateway
+
+The gateway requires a pairing token by default; requests without the right
+token are rejected with `local_gateway_pairing_rejected`. On startup the dev
+script resolves the token in this order:
+
+1. `BCO_GATEWAY_TOKEN` environment variable, if set.
+2. The `gateway-pairing-token` file inside the gateway memory directory
+   (`.bco-memory/` by default, or `BCO_GATEWAY_MEMORY_DIR`).
+3. Otherwise a fresh random token is generated and saved to that file
+   (owner-only permissions). The log prints the file path — the token value
+   itself is never logged.
+
+To pair, copy the contents of the `gateway-pairing-token` file into the
+`Pairing token` field on the extension options page. Until a token is
+configured, the options page shows the connection as unpaired and the
+extension does not send requests to the gateway. The gateway also rejects
+cross-site browser requests (disallowed `Origin`), non-JSON POST bodies, and
+request bodies larger than 1 MB.
+
+To smoke-test overlay rendering without wiring a real Agent
 provider yet, run:
 
 ```bash
@@ -123,6 +145,22 @@ The options page can edit two classes of configuration:
 Gateway host/port, memory store mode/path, schema version, and destructive
 maintenance fields are reported as restart-required. They are not claimed as
 hot-applied by `/config`.
+
+Provider routing fields submitted through `/config` are validated before they
+apply: endpoints must be `http(s)` URLs, chat/embedding paths must be relative
+paths starting with `/`, and adapter/provider values must belong to the known
+set. To further restrict which hosts provider traffic may be routed to, set a
+comma-separated allowlist before starting the gateway:
+
+```powershell
+$env:BCO_GATEWAY_ALLOWED_PROVIDER_HOSTS = "api.deepseek.com,api.openai.com"
+npm run gateway:dev
+```
+
+Endpoints outside the allowlist are rejected with
+`runtime_config_endpoint_host_not_allowed`. Successful provider route changes
+are logged as `config_provider_route_changed` with only the role, endpoint
+host, and token presence — never the token value or full URL.
 
 Mutable gateway config is persisted under `.bco-memory/gateway-runtime-config.json`
 by default. Set `BCO_GATEWAY_CONFIG_PATH` to keep it elsewhere.

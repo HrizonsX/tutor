@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { DEFAULT_CONFIG, mergeConfig } from "./config.js";
 import {
   AgentCapability,

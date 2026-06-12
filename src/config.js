@@ -1,3 +1,4 @@
+// @ts-nocheck
 export const BROWSER_CONFIG_STORAGE_KEY = "bco.browserConfig";
 
 export const DEFAULT_CONFIG = Object.freeze({
@@ -49,7 +50,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   },
   localGateway: {
     endpoint: "http://127.0.0.1:17321",
-    pairingToken: "dev-secret",
+    pairingToken: "",
     timeoutMs: 8000,
     health: {
       enabled: true,

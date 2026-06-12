@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { DEFAULT_CONFIG } from "./config.js";
 import { DerivedSignal, FactSensitivity, SuppressionReason } from "./contracts.js";
 

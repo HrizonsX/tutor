@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { DEFAULT_CONFIG } from "./config.js";
@@ -444,6 +445,53 @@ export function mergeGatewayProviderRole(base = {}, override = {}) {
   };
 }
 
+// Shared with local-gateway.js so /config validation and runtime provider
+// dispatch agree on one alias set. The normalizers live here (not in
+// local-gateway.js) because runtime-config.js imports only config.js and
+// contracts.js, so local-gateway.js -> runtime-config.js adds no import cycle.
+export function normalizeRuntimeProviderMode(provider = ProviderKind.OFF) {
+  if (provider === "none" || provider === ProviderKind.OFF) return ProviderKind.OFF;
+  if (provider === "custom_http" || provider === "test" || provider === ProviderKind.CUSTOM) return ProviderKind.CUSTOM;
+  if (provider === ProviderKind.CLOUD) return ProviderKind.CLOUD;
+  if (provider === ProviderKind.LOCAL) return ProviderKind.LOCAL;
+  return ProviderKind.OFF;
+}
+
+export function normalizeRuntimeAdapter(adapter = ProviderAdapter.NONE) {
+  if (adapter === "openai" || adapter === "openai_compatible" || adapter === ProviderAdapter.OPENAI_COMPATIBLE) {
+    return ProviderAdapter.OPENAI_COMPATIBLE;
+  }
+  if (adapter === "agent" || adapter === "internal_agent" || adapter === ProviderAdapter.INTERNAL_AGENT) {
+    return ProviderAdapter.INTERNAL_AGENT;
+  }
+  return ProviderAdapter.NONE;
+}
+
+// Equivalence sets for the normalizers above: every alias they map plus the
+// canonical contract values. ProviderAdapter.NONE ("") is a legal value.
+const RUNTIME_PROVIDER_MODE_ALIASES = Object.freeze(new Set([
+  ...Object.values(ProviderKind),
+  "none",
+  "custom_http",
+  "test"
+]));
+
+const RUNTIME_ADAPTER_ALIASES = Object.freeze(new Set([
+  ...Object.values(ProviderAdapter),
+  "openai",
+  "openai_compatible",
+  "agent",
+  "internal_agent"
+]));
+
+export function isSupportedRuntimeProviderMode(value) {
+  return typeof value === "string" && RUNTIME_PROVIDER_MODE_ALIASES.has(value);
+}
+
+export function isSupportedRuntimeAdapter(value) {
+  return typeof value === "string" && RUNTIME_ADAPTER_ALIASES.has(value);
+}
+
 export function readBoolean(value, fallback) {
   if (value === undefined || value === null || value === "") return fallback;
   return value === true || String(value).toLowerCase() === "true";
@@ -487,6 +535,29 @@ function validateRuntimeConfigValue(path, value) {
       ? { valid: true }
       : { valid: false, reason: "runtime_config_structured_output_unsupported" };
   }
+  if (isProviderRolePath(path)) {
+    if (path.endsWith(".endpoint")) {
+      return validateProviderEndpoint(value);
+    }
+    if (path.endsWith(".chatPath") || path.endsWith(".embeddingPath")) {
+      return validateProviderRelativePath(value);
+    }
+    if (path.endsWith(".adapter")) {
+      return isSupportedRuntimeAdapter(value)
+        ? { valid: true }
+        : { valid: false, reason: "runtime_config_adapter_unsupported" };
+    }
+    if (path.endsWith(".provider")) {
+      return isSupportedRuntimeProviderMode(value)
+        ? { valid: true }
+        : { valid: false, reason: "runtime_config_provider_unsupported" };
+    }
+    if (path.endsWith(".token")) {
+      return typeof value === "string" && value.length <= MAX_PROVIDER_TOKEN_LENGTH
+        ? { valid: true }
+        : { valid: false, reason: "runtime_config_token_invalid" };
+    }
+  }
   if (path.startsWith("memory.cognitive.")) {
     const defaultValue = DEFAULT_CONFIG.memory.cognitive[path.replace("memory.cognitive.", "")];
     if (typeof defaultValue === "number") {
@@ -501,6 +572,59 @@ function validateRuntimeConfigValue(path, value) {
       : { valid: false, reason: "runtime_config_memory_repository_unsupported" };
   }
   return { valid: true };
+}
+
+const MAX_PROVIDER_TOKEN_LENGTH = 512;
+const MAX_PROVIDER_RELATIVE_PATH_LENGTH = 256;
+
+function isProviderRolePath(path = "") {
+  return path.startsWith("explain.") || path.startsWith("embedding.") || path.startsWith("relationProposer.");
+}
+
+function validateProviderEndpoint(value) {
+  if (typeof value !== "string") {
+    return { valid: false, reason: "runtime_config_endpoint_invalid" };
+  }
+  if (value === "") return { valid: true };
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return { valid: false, reason: "runtime_config_endpoint_invalid" };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { valid: false, reason: "runtime_config_endpoint_invalid" };
+  }
+  const allowedHosts = readAllowedProviderHosts();
+  if (allowedHosts.length > 0
+    && !allowedHosts.includes(parsed.hostname.toLowerCase())
+    && !allowedHosts.includes(parsed.host.toLowerCase())) {
+    return { valid: false, reason: "runtime_config_endpoint_host_not_allowed" };
+  }
+  return { valid: true };
+}
+
+// chatPath/embeddingPath are relative paths joined onto the endpoint (default
+// "/chat/completions"); they must never be absolute URLs.
+function validateProviderRelativePath(value) {
+  if (typeof value !== "string" || value.length > MAX_PROVIDER_RELATIVE_PATH_LENGTH) {
+    return { valid: false, reason: "runtime_config_path_invalid" };
+  }
+  if (value === "") return { valid: true };
+  return value.startsWith("/")
+    ? { valid: true }
+    : { valid: false, reason: "runtime_config_path_invalid" };
+}
+
+function readAllowedProviderHosts() {
+  // Read at validation time (not module load) so operators can change the
+  // allowlist without restarting the gateway. process access is guarded in
+  // case this module is ever evaluated outside Node.
+  const raw = globalThis.process?.env?.BCO_GATEWAY_ALLOWED_PROVIDER_HOSTS ?? "";
+  return String(raw)
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 function isRestartRequiredPath(path = "") {

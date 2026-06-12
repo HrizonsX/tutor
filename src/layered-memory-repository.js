@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { DEFAULT_CONFIG, mergeConfig } from "./config.js";
 import { AgentResultStatus, MemoryEventType, MemoryRepositoryMode } from "./contracts.js";
 import { normalizeKnowledgeObjectName } from "./concepts.js";

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { FactSensitivity, MemoryEventType } from "./contracts.js";
 
 const FEEDBACK_TYPES = new Set([

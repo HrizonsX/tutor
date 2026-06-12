@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { DEFAULT_CONFIG } from "./config.js";
 import {
   AgentCapability,
@@ -18,7 +19,9 @@ import {
 } from "./local-memory-store.js";
 import { createMemoryRepositoryFromRuntimeConfig } from "./memory-repository-factory.js";
 import { createProviderAdapterClient } from "./provider-adapters.js";
+import { normalizeRuntimeAdapter, normalizeRuntimeProviderMode } from "./runtime-config.js";
 import { createRuntimeExplainPipeline } from "./runtime-explain-pipeline.js";
+import { timingSafeEqual } from "node:crypto";
 import { inspect } from "node:util";
 
 export {
@@ -334,6 +337,9 @@ export function createGatewayProviderRuntime({
 
 export function createLocalGatewayHandler({
   token = "",
+  allowUnauthenticated = false,
+  maxBodyBytes = DEFAULT_MAX_REQUEST_BODY_BYTES,
+  allowedOrigins = [],
   store = createLocalMemoryStore(),
   capabilities = {},
   explainHandler = null,
@@ -341,6 +347,7 @@ export function createLocalGatewayHandler({
   embeddingHandler = null,
   providerRuntime = null,
   runtimeConfigState = null,
+  onProviderRouteChange = null,
   now = () => Date.now()
 } = {}) {
   const runtime = providerRuntime;
@@ -368,8 +375,19 @@ export function createLocalGatewayHandler({
     const method = request.method ?? "GET";
     const url = new URL(request.url ?? "http://127.0.0.1/");
     const path = url.pathname.replace(/\/+$/, "") || "/";
-    if (!isAuthorized(request, token)) {
+    if (!isAuthorized(request, token, allowUnauthenticated)) {
       return jsonResponse({ status: AgentResultStatus.UNAVAILABLE, reason: "local_gateway_pairing_rejected" }, 401);
+    }
+    const guardRejection = evaluateGatewayRequestGuards({
+      method,
+      path,
+      headers: request.headers ?? {},
+      body: request.body,
+      maxBodyBytes,
+      allowedOrigins
+    });
+    if (guardRejection) {
+      return jsonResponse({ status: AgentResultStatus.UNAVAILABLE, reason: guardRejection.reason }, guardRejection.status);
     }
 
     if (path === "/health") {
@@ -415,6 +433,7 @@ export function createLocalGatewayHandler({
         const effective = configState.getEffectiveConfig?.();
         store.updateConfig?.({ memory: effective?.memory ?? {} });
       }
+      notifyProviderRouteChange(onProviderRouteChange, result, configState);
       return jsonResponse(result, result.status === AgentResultStatus.INVALID ? 400 : 200);
     }
     if (path === "/explain") {
@@ -578,7 +597,8 @@ export async function startLocalGatewayServer({
   host = "127.0.0.1",
   port = 17321,
   handler = createLocalGatewayHandler(),
-  logger = null
+  logger = null,
+  maxBodyBytes = DEFAULT_MAX_REQUEST_BODY_BYTES
 } = {}) {
   const { createServer } = await import("node:http");
   const server = createServer(async (req, res) => {
@@ -588,8 +608,35 @@ export async function startLocalGatewayServer({
     const method = req.method ?? "GET";
     const path = redactUrlForLog(requestUrl);
     const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
+    let receivedBodyBytes = 0;
+    let rejectedTooLarge = false;
+    req.on("data", (chunk) => {
+      if (rejectedTooLarge) return;
+      receivedBodyBytes += chunk.length;
+      if (receivedBodyBytes > maxBodyBytes) {
+        // Reject once, drop buffered chunks, and stop the upload. The flag
+        // also keeps the "end" listener from writing a second response head.
+        rejectedTooLarge = true;
+        chunks.length = 0;
+        res.writeHead(413, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          status: AgentResultStatus.UNAVAILABLE,
+          reason: "request_body_too_large"
+        }), () => req.destroy());
+        logGatewayServer(logger, "warn", "request_finish", {
+          method,
+          path,
+          status: 413,
+          startedAt: startedAtIso,
+          finishedAt: new Date().toISOString(),
+          durationMs: Date.now() - startedAt
+        });
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", async () => {
+      if (rejectedTooLarge) return;
       const body = Buffer.concat(chunks).toString("utf8");
       try {
         const response = await handler({
@@ -701,24 +748,6 @@ function resolveRelationProposerRoleConfig(runtimeConfig = {}) {
     timeoutMs: relationConfig.timeoutMs ?? explainConfig.timeoutMs,
     health: relationConfig.health ?? explainConfig.health
   });
-}
-
-function normalizeRuntimeProviderMode(provider = ProviderKind.OFF) {
-  if (provider === "none" || provider === ProviderKind.OFF) return ProviderKind.OFF;
-  if (provider === "custom_http" || provider === "test" || provider === ProviderKind.CUSTOM) return ProviderKind.CUSTOM;
-  if (provider === ProviderKind.CLOUD) return ProviderKind.CLOUD;
-  if (provider === ProviderKind.LOCAL) return ProviderKind.LOCAL;
-  return ProviderKind.OFF;
-}
-
-function normalizeRuntimeAdapter(adapter = ProviderAdapter.NONE) {
-  if (adapter === "openai" || adapter === "openai_compatible" || adapter === ProviderAdapter.OPENAI_COMPATIBLE) {
-    return ProviderAdapter.OPENAI_COMPATIBLE;
-  }
-  if (adapter === "agent" || adapter === "internal_agent" || adapter === ProviderAdapter.INTERNAL_AGENT) {
-    return ProviderAdapter.INTERNAL_AGENT;
-  }
-  return ProviderAdapter.NONE;
 }
 
 function validateRuntimeProvider(provider, capabilityKind) {
@@ -838,12 +867,111 @@ function unavailableRuntimeProvider(reason, capabilityKind, provider = {}, extra
   };
 }
 
-function isAuthorized(request, token) {
-  if (!token) return true;
+function isAuthorized(request, token, allowUnauthenticated = false) {
+  if (!token) return allowUnauthenticated === true;
   const headers = request.headers ?? {};
-  const headerValue = headers["x-bco-pairing-token"] ?? headers["X-BCO-Pairing-Token"];
-  const authorization = headers.authorization ?? headers.Authorization ?? "";
-  return headerValue === token || authorization === `Bearer ${token}`;
+  const headerValue = readHeaderValue(headers, "x-bco-pairing-token");
+  const authorization = readHeaderValue(headers, "authorization");
+  if (typeof headerValue === "string" && constantTimeEquals(headerValue, token)) return true;
+  return typeof authorization === "string" && constantTimeEquals(authorization, `Bearer ${token}`);
+}
+
+function constantTimeEquals(left, right) {
+  const leftBuffer = Buffer.from(String(left), "utf8");
+  const rightBuffer = Buffer.from(String(right), "utf8");
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+export const DEFAULT_MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+
+// Request guards below are intentionally small composable functions so the
+// gateway split (P8) can move them into the thin HTTP layer unchanged.
+export function isAllowedGatewayOrigin(origin, allowedOrigins = []) {
+  if (origin === undefined || origin === null || origin === "") return true;
+  const value = String(origin);
+  if (value === "null") return true;
+  if (/^(chrome|moz)-extension:\/\//.test(value)) return true;
+  return allowedOrigins.includes(value);
+}
+
+export function evaluateGatewayRequestGuards({
+  method = "GET",
+  path = "/",
+  headers = {},
+  body = null,
+  maxBodyBytes = DEFAULT_MAX_REQUEST_BODY_BYTES,
+  allowedOrigins = []
+} = {}) {
+  const origin = readHeaderValue(headers, "origin");
+  if ((method !== "GET" || path === "/config") && !isAllowedGatewayOrigin(origin, allowedOrigins)) {
+    return { status: 403, reason: "forbidden_origin" };
+  }
+  if (method === "POST" && typeof body === "string" && body.length > 0) {
+    if (Buffer.byteLength(body, "utf8") > maxBodyBytes) {
+      return { status: 413, reason: "request_body_too_large" };
+    }
+    const contentType = String(readHeaderValue(headers, "content-type") ?? "").toLowerCase();
+    if (!contentType.includes("application/json")) {
+      return { status: 415, reason: "unsupported_content_type" };
+    }
+  }
+  return null;
+}
+
+const PROVIDER_ROUTE_CHANGE_PATH_PATTERN = /^(explain|embedding|relationProposer)\.(endpoint|token|adapter|provider)$/;
+
+// Audit hook for /config provider route rewrites. The payload is restricted to
+// role + endpoint host + token presence: never the token value and never a
+// full URL that could carry query-string secrets.
+function notifyProviderRouteChange(onProviderRouteChange, result, configState) {
+  if (typeof onProviderRouteChange !== "function") return;
+  if (result?.status !== AgentResultStatus.AVAILABLE) return;
+  const changedRoles = new Set((result.appliedPaths ?? [])
+    .map((path) => PROVIDER_ROUTE_CHANGE_PATH_PATTERN.exec(path)?.[1])
+    .filter(Boolean));
+  if (changedRoles.size === 0) return;
+  const effective = configState?.getEffectiveConfig?.() ?? {};
+  for (const role of changedRoles) {
+    const roleConfig = effective?.[role] ?? {};
+    try {
+      onProviderRouteChange({
+        role,
+        endpointHost: extractEndpointHostForAudit(roleConfig.endpoint ?? ""),
+        tokenPresent: Boolean(roleConfig.token)
+      });
+    } catch {
+      // Audit hooks are observability only and must never break /config.
+    }
+  }
+}
+
+function extractEndpointHostForAudit(endpoint = "") {
+  if (!endpoint) return "";
+  try {
+    // URL.host excludes userinfo, path, and query, so it cannot leak secrets.
+    return new URL(String(endpoint)).host;
+  } catch {
+    return "";
+  }
+}
+
+export function createProviderRouteChangeAuditLogger(logger) {
+  return (change = {}) => {
+    logGatewayServer(logger, "info", "config_provider_route_changed", {
+      role: change.role ?? null,
+      endpointHost: change.endpointHost ?? "",
+      tokenPresent: Boolean(change.tokenPresent)
+    });
+  };
+}
+
+function readHeaderValue(headers = {}, name) {
+  const target = String(name).toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (String(key).toLowerCase() === target) return value;
+  }
+  return undefined;
 }
 
 async function readBody(request) {

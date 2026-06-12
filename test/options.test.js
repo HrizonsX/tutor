@@ -65,6 +65,26 @@ test("options view model maps live diagnostics and gateway health", () => {
   assert.equal(model.decisions[0].action, "终止 (无动作)");
 });
 
+test("options view model shows explicit unpaired guidance when pairing token is missing or rejected", () => {
+  const required = buildOptionsViewModel({
+    health: {
+      status: AgentResultStatus.UNAVAILABLE,
+      reason: "local_gateway_pairing_required"
+    }
+  });
+  const rejected = buildOptionsViewModel({
+    health: {
+      status: AgentResultStatus.UNAVAILABLE,
+      reason: "local_gateway_pairing_rejected"
+    }
+  });
+
+  assert.equal(required.connection.text, "未配对 (请在下方填写配对 token)");
+  assert.equal(required.connection.tone, "danger");
+  assert.equal(rejected.connection.text, "未配对 (配对 token 被网关拒绝)");
+  assert.equal(rejected.connection.tone, "danger");
+});
+
 test("options view model exposes layered memory component status", () => {
   const model = buildOptionsViewModel({
     health: {

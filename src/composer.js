@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { DEFAULT_CONFIG } from "./config.js";
 import { AgentCapability, AgentRequestGoal, ExplanationStyle } from "./contracts.js";
 import { createUnavailableAgentResult, validateAgentExplanationResult } from "./agent-service.js";

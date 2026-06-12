@@ -179,3 +179,97 @@ test("runtime config state rejects invalid hot update values without mutation", 
   assert.equal(update.validationFailures[0].path, "explain.timeoutMs");
   assert.equal(state.getEffectiveConfig().explain.timeoutMs, 8000);
 });
+
+test("runtime config rejects provider endpoints that are not http or https URLs", () => {
+  const state = createGatewayRuntimeConfigState({
+    providerConfig: {
+      explain: { endpoint: "https://api.example/v1" }
+    }
+  });
+
+  const ftpUpdate = state.update({ explain: { endpoint: "ftp://attacker.example" } });
+  const garbageUpdate = state.update({ explain: { endpoint: "not a url" } });
+  const fileUpdate = state.update({ embedding: { endpoint: "file:///etc/passwd" } });
+
+  assert.equal(ftpUpdate.status, AgentResultStatus.INVALID);
+  assert.equal(ftpUpdate.validationFailures[0].path, "explain.endpoint");
+  assert.equal(ftpUpdate.validationFailures[0].reason, "runtime_config_endpoint_invalid");
+  assert.equal(garbageUpdate.status, AgentResultStatus.INVALID);
+  assert.equal(fileUpdate.status, AgentResultStatus.INVALID);
+  assert.equal(fileUpdate.validationFailures[0].path, "embedding.endpoint");
+  assert.equal(state.getEffectiveConfig().explain.endpoint, "https://api.example/v1");
+});
+
+test("runtime config accepts valid https endpoints and clearing an endpoint", () => {
+  const state = createGatewayRuntimeConfigState({});
+
+  const httpsUpdate = state.update({ explain: { endpoint: "https://api.deepseek.com" } });
+  const clearedUpdate = state.update({ explain: { endpoint: "" } });
+
+  assert.equal(httpsUpdate.status, AgentResultStatus.AVAILABLE);
+  assert.deepEqual(httpsUpdate.appliedPaths, ["explain.endpoint"]);
+  assert.equal(clearedUpdate.status, AgentResultStatus.AVAILABLE);
+});
+
+test("runtime config enforces the provider host allowlist when configured", () => {
+  const previous = process.env.BCO_GATEWAY_ALLOWED_PROVIDER_HOSTS;
+  process.env.BCO_GATEWAY_ALLOWED_PROVIDER_HOSTS = "api.deepseek.com, api.openai.com";
+  try {
+    const state = createGatewayRuntimeConfigState({});
+
+    const allowed = state.update({ explain: { endpoint: "https://api.deepseek.com/v1" } });
+    const blocked = state.update({ explain: { endpoint: "https://attacker.example/v1" } });
+
+    assert.equal(allowed.status, AgentResultStatus.AVAILABLE);
+    assert.equal(blocked.status, AgentResultStatus.INVALID);
+    assert.equal(blocked.validationFailures[0].reason, "runtime_config_endpoint_host_not_allowed");
+  } finally {
+    if (previous === undefined) {
+      delete process.env.BCO_GATEWAY_ALLOWED_PROVIDER_HOSTS;
+    } else {
+      process.env.BCO_GATEWAY_ALLOWED_PROVIDER_HOSTS = previous;
+    }
+  }
+});
+
+test("runtime config rejects unsupported provider adapters and modes", () => {
+  const state = createGatewayRuntimeConfigState({});
+
+  const badAdapter = state.update({ explain: { adapter: "bogus-adapter" } });
+  const badProvider = state.update({ relationProposer: { provider: "bogus-provider" } });
+  const goodAdapter = state.update({ explain: { adapter: "openai-compatible" } });
+  const goodProvider = state.update({ explain: { provider: ProviderKind.CUSTOM } });
+
+  assert.equal(badAdapter.status, AgentResultStatus.INVALID);
+  assert.equal(badAdapter.validationFailures[0].reason, "runtime_config_adapter_unsupported");
+  assert.equal(badProvider.status, AgentResultStatus.INVALID);
+  assert.equal(badProvider.validationFailures[0].reason, "runtime_config_provider_unsupported");
+  assert.equal(goodAdapter.status, AgentResultStatus.AVAILABLE);
+  assert.equal(goodProvider.status, AgentResultStatus.AVAILABLE);
+});
+
+test("runtime config keeps relative chat paths valid and rejects non-rooted ones", () => {
+  const state = createGatewayRuntimeConfigState({});
+
+  const defaultPath = state.update({ explain: { chatPath: "/chat/completions" } });
+  const relativePath = state.update({ explain: { chatPath: "chat/completions" } });
+  const absoluteUrl = state.update({ embedding: { embeddingPath: "https://attacker.example/x" } });
+
+  assert.equal(defaultPath.status, AgentResultStatus.AVAILABLE);
+  assert.equal(relativePath.status, AgentResultStatus.INVALID);
+  assert.equal(relativePath.validationFailures[0].reason, "runtime_config_path_invalid");
+  assert.equal(absoluteUrl.status, AgentResultStatus.INVALID);
+});
+
+test("runtime config bounds provider token values", () => {
+  const state = createGatewayRuntimeConfigState({});
+
+  const maxLength = state.update({ explain: { token: "x".repeat(512) } });
+  const tooLong = state.update({ explain: { token: "x".repeat(513) } });
+  const nonString = state.update({ explain: { token: 12345 } });
+
+  assert.equal(maxLength.status, AgentResultStatus.AVAILABLE);
+  assert.equal(tooLong.status, AgentResultStatus.INVALID);
+  assert.equal(tooLong.validationFailures[0].reason, "runtime_config_token_invalid");
+  assert.equal(nonString.status, AgentResultStatus.INVALID);
+});

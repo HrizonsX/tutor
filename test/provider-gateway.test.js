@@ -301,7 +301,7 @@ test("local gateway config API reads redacted config and hot-updates provider ru
   const update = await handler({
     method: "POST",
     url: "http://127.0.0.1:17321/config",
-    headers: { "x-bco-pairing-token": "secret" },
+    headers: { "content-type": "application/json", "x-bco-pairing-token": "secret" },
     body: JSON.stringify({
       config: {
         explain: {
@@ -316,7 +316,7 @@ test("local gateway config API reads redacted config and hot-updates provider ru
   const explain = await handler({
     method: "POST",
     url: "http://127.0.0.1:17321/explain",
-    headers: { "x-bco-pairing-token": "secret" },
+    headers: { "content-type": "application/json", "x-bco-pairing-token": "secret" },
     body: JSON.stringify({
       target: { canonicalName: "Hot update target", observedText: "Hot update target" },
       minimalContext: { text: "A target that forces a provider call." }
@@ -439,7 +439,7 @@ test("gateway explain schedules relation proposer and later explain receives mem
   const fetchGateway = (body) => handler({
     method: "POST",
     url: "http://127.0.0.1:17321/explain",
-    headers: { "x-bco-pairing-token": "secret" },
+    headers: { "content-type": "application/json", "x-bco-pairing-token": "secret" },
     body: JSON.stringify(body)
   }).then((response) => response.json());
 
@@ -514,7 +514,7 @@ test("gateway config update applies memory recall policy to next memory query", 
   const query = () => handler({
     method: "POST",
     url: "http://127.0.0.1:17321/memory/query",
-    headers: { "x-bco-pairing-token": "secret" },
+    headers: { "content-type": "application/json", "x-bco-pairing-token": "secret" },
     body: JSON.stringify({ canonicalName: "Attention", timestamp: 7000 })
   }).then((response) => response.json());
 
@@ -522,7 +522,7 @@ test("gateway config update applies memory recall policy to next memory query", 
   await handler({
     method: "POST",
     url: "http://127.0.0.1:17321/config",
-    headers: { "x-bco-pairing-token": "secret" },
+    headers: { "content-type": "application/json", "x-bco-pairing-token": "secret" },
     body: JSON.stringify({ config: { memory: { cognitive: { microBridgeLimit: 2 } } } })
   });
   const after = await query();
@@ -566,7 +566,7 @@ test("local gateway config API hot-updates embedding provider routing", async ()
   await handler({
     method: "POST",
     url: "http://127.0.0.1:17321/config",
-    headers: { "x-bco-pairing-token": "secret" },
+    headers: { "content-type": "application/json", "x-bco-pairing-token": "secret" },
     body: JSON.stringify({
       config: {
         embedding: {
@@ -580,7 +580,7 @@ test("local gateway config API hot-updates embedding provider routing", async ()
   const embedding = await handler({
     method: "POST",
     url: "http://127.0.0.1:17321/embedding",
-    headers: { "x-bco-pairing-token": "secret" },
+    headers: { "content-type": "application/json", "x-bco-pairing-token": "secret" },
     body: JSON.stringify({ text: "summary" })
   }).then((response) => response.json());
   const body = JSON.parse(providerRequests[0].options.body);
@@ -589,4 +589,52 @@ test("local gateway config API hot-updates embedding provider routing", async ()
   assert.equal(providerRequests[0].url, "https://embed-second.example/v2/embeddings");
   assert.equal(providerRequests[0].options.headers.authorization, "Bearer second-embedding-token");
   assert.equal(body.model, "second-embedding-model");
+});
+
+test("local gateway config API audits provider route changes without leaking secrets", async () => {
+  const auditEvents = [];
+  const configState = createGatewayRuntimeConfigState({
+    providerConfig: {
+      explain: { endpoint: "https://first.example/v1", token: "first-token" }
+    }
+  });
+  const handler = createLocalGatewayHandler({
+    token: "secret",
+    runtimeConfigState: configState,
+    onProviderRouteChange: (change) => auditEvents.push(change),
+    now: () => 9000
+  });
+
+  await handler({
+    method: "POST",
+    url: "http://127.0.0.1:17321/config",
+    headers: { "content-type": "application/json", "x-bco-pairing-token": "secret" },
+    body: JSON.stringify({
+      config: { explain: { endpoint: "https://second.example/v2", token: "second-token" } }
+    })
+  });
+  await handler({
+    method: "POST",
+    url: "http://127.0.0.1:17321/config",
+    headers: { "content-type": "application/json", "x-bco-pairing-token": "secret" },
+    body: JSON.stringify({
+      config: { explain: { modelName: "renamed-model" } }
+    })
+  });
+  await handler({
+    method: "POST",
+    url: "http://127.0.0.1:17321/config",
+    headers: { "content-type": "application/json", "x-bco-pairing-token": "secret" },
+    body: JSON.stringify({
+      config: { explain: { endpoint: "ftp://attacker.example" } }
+    })
+  });
+
+  // One audit event for the route change; none for the unrelated model rename
+  // and none for the rejected endpoint.
+  assert.equal(auditEvents.length, 1);
+  assert.equal(auditEvents[0].role, "explain");
+  assert.equal(auditEvents[0].endpointHost, "second.example");
+  assert.equal(auditEvents[0].tokenPresent, true);
+  assert.doesNotMatch(JSON.stringify(auditEvents), /second-token|\/v2/);
 });

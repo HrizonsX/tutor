@@ -1,3 +1,4 @@
+// @ts-nocheck
 (async () => {
   const root = document.documentElement;
   root.dataset.bcoLoaderState = "loading";

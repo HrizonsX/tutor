@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { DEFAULT_CONFIG } from "./config.js";
 
 export function clampText(text = "", limit = DEFAULT_CONFIG.privacy.maxContextChars) {

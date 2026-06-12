@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { BROWSER_CONFIG_STORAGE_KEY, loadRuntimeConfig, mergeConfig } from "./config.js";
 import { ReadingContextTracker, isIgnoredReadingSurface } from "./reading-context.js";
 import { BehaviorTracker } from "./behavior.js";

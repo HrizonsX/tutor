@@ -54,7 +54,7 @@ test("local gateway server logs incoming HTTP requests to the provided logger", 
   };
   const server = await startLocalGatewayServer({
     port: 0,
-    handler: createLocalGatewayHandler(),
+    handler: createLocalGatewayHandler({ allowUnauthenticated: true }),
     logger
   });
   const address = server.address();
@@ -388,7 +388,7 @@ test("local gateway console logger keeps utility endpoints to one-line summaries
   console.info = (message, details) => entries.push({ message, details });
   console.warn = (message, details) => entries.push({ message, details });
   const store = createLocalMemoryStore({ now: () => 9100, autoProcessBacklog: false });
-  const handler = createLocalGatewayHandler({ store, now: () => 9100 });
+  const handler = createLocalGatewayHandler({ store, now: () => 9100, allowUnauthenticated: true });
   const server = await startLocalGatewayServer({ port: 0, handler, logger: console });
   const address = server.address();
   const base = `http://127.0.0.1:${address.port}`;
@@ -457,6 +457,7 @@ test("local gateway memory events endpoint accepts batched event writes", async 
 
 test("local gateway health advertises streaming explanation capability", async () => {
   const handler = createLocalGatewayHandler({
+    allowUnauthenticated: true,
     providerRuntime: {
       capabilities: {
         [AgentCapability.EXPLAIN]: true,
@@ -716,5 +717,169 @@ test("local gateway injects runtime-owned layered memory and ignores browser mem
   } finally {
     await new Promise((resolve) => server.close(resolve));
     store.close();
+  }
+});
+
+test("local gateway rejects wrong pairing tokens with 401 on config and memory query", async () => {
+  const store = createLocalMemoryStore({ now: () => 12000, autoProcessBacklog: false });
+  const handler = createLocalGatewayHandler({ token: "pairing-secret", store, now: () => 12000 });
+
+  const configResponse = await handler({
+    method: "GET",
+    url: "http://127.0.0.1:17321/config",
+    headers: { "x-bco-pairing-token": "wrong-secret" }
+  });
+  const queryResponse = await handler({
+    method: "POST",
+    url: "http://127.0.0.1:17321/memory/query",
+    headers: { "content-type": "application/json", authorization: "Bearer wrong-secret" },
+    body: JSON.stringify({ canonicalName: "KL divergence", timestamp: 12000 })
+  });
+  const configBody = await configResponse.json();
+  const queryBody = await queryResponse.json();
+
+  assert.equal(configResponse.status, 401);
+  assert.equal(configBody.status, AgentResultStatus.UNAVAILABLE);
+  assert.equal(configBody.reason, "local_gateway_pairing_rejected");
+  assert.equal(queryResponse.status, 401);
+  assert.equal(queryBody.reason, "local_gateway_pairing_rejected");
+});
+
+test("local gateway without a pairing token denies requests unless explicitly unauthenticated", async () => {
+  const store = createLocalMemoryStore({ now: () => 12100, autoProcessBacklog: false });
+  const denyingHandler = createLocalGatewayHandler({ store, now: () => 12100 });
+  const optInHandler = createLocalGatewayHandler({ store, now: () => 12100, allowUnauthenticated: true });
+
+  const denied = await denyingHandler({ method: "GET", url: "http://127.0.0.1:17321/health", headers: {} });
+  const allowed = await optInHandler({ method: "GET", url: "http://127.0.0.1:17321/health", headers: {} });
+  const deniedBody = await denied.json();
+  const allowedBody = await allowed.json();
+
+  assert.equal(denied.status, 401);
+  assert.equal(deniedBody.reason, "local_gateway_pairing_rejected");
+  assert.equal(allowed.status, 200);
+  assert.equal(allowedBody.status, AgentResultStatus.AVAILABLE);
+});
+
+test("local gateway rejects cross-site origins for config reads and writes", async () => {
+  const handler = createLocalGatewayHandler({ token: "pairing-secret", now: () => 12200 });
+
+  const update = await handler({
+    method: "POST",
+    url: "http://127.0.0.1:17321/config",
+    headers: {
+      "content-type": "application/json",
+      "x-bco-pairing-token": "pairing-secret",
+      origin: "https://evil.example"
+    },
+    body: JSON.stringify({ config: { explain: { endpoint: "https://attacker.example" } } })
+  });
+  const read = await handler({
+    method: "GET",
+    url: "http://127.0.0.1:17321/config",
+    headers: {
+      "x-bco-pairing-token": "pairing-secret",
+      origin: "https://evil.example"
+    }
+  });
+  const updateBody = await update.json();
+  const readBody = await read.json();
+
+  assert.equal(update.status, 403);
+  assert.equal(updateBody.status, AgentResultStatus.UNAVAILABLE);
+  assert.equal(updateBody.reason, "forbidden_origin");
+  assert.equal(read.status, 403);
+  assert.equal(readBody.reason, "forbidden_origin");
+});
+
+test("local gateway accepts extension origins for memory writes", async () => {
+  const store = createLocalMemoryStore({ now: () => 12300, autoProcessBacklog: false });
+  const handler = createLocalGatewayHandler({ token: "pairing-secret", store, now: () => 12300 });
+
+  const response = await handler({
+    method: "POST",
+    url: "http://127.0.0.1:17321/memory/events",
+    headers: {
+      "content-type": "application/json",
+      "x-bco-pairing-token": "pairing-secret",
+      origin: "chrome-extension://abcdefghijklmnop"
+    },
+    body: JSON.stringify({
+      event: { id: "evt_origin_ok", type: MemoryEventType.KNOWLEDGE_ENCOUNTERED, canonicalName: "KL divergence", timestamp: 12300 }
+    })
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.status, AgentResultStatus.AVAILABLE);
+});
+
+test("local gateway rejects non-JSON POST bodies with 415", async () => {
+  const store = createLocalMemoryStore({ now: () => 12400, autoProcessBacklog: false });
+  const handler = createLocalGatewayHandler({ token: "pairing-secret", store, now: () => 12400 });
+
+  const response = await handler({
+    method: "POST",
+    url: "http://127.0.0.1:17321/memory/events",
+    headers: {
+      "content-type": "text/plain",
+      "x-bco-pairing-token": "pairing-secret"
+    },
+    body: JSON.stringify({
+      event: { id: "evt_text_plain", type: MemoryEventType.KNOWLEDGE_ENCOUNTERED, canonicalName: "KL divergence", timestamp: 12400 }
+    })
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 415);
+  assert.equal(body.status, AgentResultStatus.UNAVAILABLE);
+  assert.equal(body.reason, "unsupported_content_type");
+});
+
+test("local gateway handler rejects oversized request bodies with 413", async () => {
+  const handler = createLocalGatewayHandler({
+    token: "pairing-secret",
+    maxBodyBytes: 1024,
+    now: () => 12500
+  });
+
+  const response = await handler({
+    method: "POST",
+    url: "http://127.0.0.1:17321/memory/events",
+    headers: {
+      "content-type": "application/json",
+      "x-bco-pairing-token": "pairing-secret"
+    },
+    body: JSON.stringify({ event: { id: "evt_huge", payload: "x".repeat(4096) } })
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 413);
+  assert.equal(body.status, AgentResultStatus.UNAVAILABLE);
+  assert.equal(body.reason, "request_body_too_large");
+});
+
+test("local gateway server stops reading oversized uploads and answers 413", async () => {
+  const store = createLocalMemoryStore({ now: () => 12600, autoProcessBacklog: false });
+  const handler = createLocalGatewayHandler({ token: "pairing-secret", store, now: () => 12600 });
+  const server = await startLocalGatewayServer({ port: 0, handler, maxBodyBytes: 1024 });
+  const address = server.address();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/memory/events`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-bco-pairing-token": "pairing-secret"
+      },
+      body: JSON.stringify({ event: { id: "evt_server_huge", payload: "x".repeat(8192) } })
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 413);
+    assert.equal(body.status, AgentResultStatus.UNAVAILABLE);
+    assert.equal(body.reason, "request_body_too_large");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
   }
 });

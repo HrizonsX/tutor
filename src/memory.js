@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { DEFAULT_CONFIG } from "./config.js";
 import { DerivedSignal, MemoryEventType } from "./contracts.js";
 import { normalizeKnowledgeObjectName } from "./concepts.js";
