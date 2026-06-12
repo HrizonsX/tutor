@@ -17,7 +17,9 @@ import {
   ProviderRole,
   StructuredOutputMode
 } from "../src/contracts.js";
+import { extractConceptCandidates } from "../src/concepts.js";
 import {
+  buildAnalysisPayload,
   sanitizeEventContext,
   sanitizeExplanationVersion,
   sanitizeKnowledgeContext,
@@ -159,6 +161,22 @@ test("event context prefers prehashed page metadata over raw url and title", () 
   assert.ok(fallback.pagePathHash);
   assert.ok(fallback.titleHash);
   assert.doesNotMatch(JSON.stringify(fallback), /private\/path|token=secret|Private Title/);
+});
+
+test("analysis payload is bounded and does not become full-page storage", () => {
+  const fragment = {
+    id: "long",
+    type: "paragraph",
+    text: `KL divergence ${"long private article text ".repeat(200)}`
+  };
+  const candidates = extractConceptCandidates({ text: fragment.text });
+  const payload = buildAnalysisPayload(fragment, candidates, {
+    privacy: { maxContextChars: 300, maxStoredAliasChars: 120, maxStoredUrlChars: 180 }
+  });
+
+  assert.ok(payload.text.length <= 300);
+  assert.equal(payload.fragmentId, "long");
+  assert.equal(payload.concepts[0].canonicalName, "KL divergence");
 });
 
 test("untrusted proposal text loses control chars and instruction markers but keeps CJK punctuation", () => {

@@ -138,6 +138,24 @@ test("reading profile interest raises priority only with semantic content", () =
   assert.ok(noContent.suppressions.includes(SuppressionReason.NO_CONTENT_SIGNAL));
 });
 
+test("marked known feedback suppresses a dwell-driven repeat prompt", () => {
+  const decision = scoreIntervention({
+    behavior: { dwellSignal: true, dwellMs: 20000 },
+    candidates: extractConceptCandidates({
+      text: "The Bretton Woods system explains why the dollar became central to postwar finance.",
+      selectedText: "Bretton Woods"
+    }),
+    learningContext: {
+      derivedSignals: { recently_marked_known: true },
+      cooldowns: {},
+      profileHints: { familiarObject: true }
+    }
+  });
+
+  assert.equal(decision.shouldShow, false);
+  assert.ok(decision.suppressions.includes(SuppressionReason.RECENTLY_MARKED_KNOWN));
+});
+
 test("profile muting, known feedback, and wrong feedback affect priority", () => {
   const candidates = extractConceptCandidates({
     text: "NASA announced a latest mission update.",
