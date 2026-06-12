@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { DEFAULT_CONFIG } from "../shared/config.js";
+import { uniqueTruthy } from "../shared/collection-util.js";
 import { DerivedSignal, MemoryEventType } from "../shared/contracts.js";
 import { normalizeKnowledgeObjectName } from "../shared/concepts.js";
 import { clampSourceDate, clampSourceIds, clampText, hashString, sanitizeRelationEvidence, stripUntrustedProposalText } from "../shared/privacy.js";
@@ -98,7 +99,7 @@ export function normalizeCognitiveMemoryState(value = {}) {
     relatedConceptHints: Array.isArray(value.relatedConceptHints) ? value.relatedConceptHints : [],
     reflectionReports: Array.isArray(value.reflectionReports) ? value.reflectionReports : [],
     relationProposalCache: value.relationProposalCache && typeof value.relationProposalCache === "object" ? value.relationProposalCache : {},
-    staleDates: Array.isArray(value.staleDates) ? unique(value.staleDates.map(clampSourceDate).filter(Boolean)) : [],
+    staleDates: Array.isArray(value.staleDates) ? uniqueTruthy(value.staleDates.map(clampSourceDate).filter(Boolean)) : [],
     relationDiscovery: {
       ...empty.relationDiscovery,
       ...(value.relationDiscovery ?? {})
@@ -129,7 +130,7 @@ export function buildConceptProjection({
   const allEvents = [...targetEvents, ...targetProfileEvents];
   const versions = explanationVersions.filter((version) => version.target === target || version.canonicalName === target);
   const candidates = memoryCandidates.filter((candidate) => candidate.canonicalName === target && candidate.status !== "rejected");
-  const aliases = unique(allEvents.map((event) => event.observedAlias).filter(Boolean));
+  const aliases = uniqueTruthy(allEvents.map((event) => event.observedAlias).filter(Boolean));
   const count = (types) => allEvents.filter((event) => types.includes(event.type)).length;
   const seenTypes = [
     MemoryEventType.KNOWLEDGE_ENCOUNTERED,
@@ -206,7 +207,7 @@ export function buildDailyMemorySummary({
   config = DEFAULT_CONFIG
 } = {}) {
   const dayEvents = [...events, ...profileEvents].filter((event) => toMemoryDate(event.timestamp) === date);
-  const names = unique(dayEvents.map((event) => event.canonicalName).filter(Boolean));
+  const names = uniqueTruthy(dayEvents.map((event) => event.canonicalName).filter(Boolean));
   const conceptRefs = names
     .map((name) => conceptProjections[name] ?? buildConceptProjection({ canonicalName: name, events, profileEvents, timestamp, config }))
     .map((projection) => ({
@@ -237,7 +238,7 @@ export function buildDailyMemorySummary({
       status: relation.status,
       sourceDates: relation.sourceDates ?? []
     }));
-  const topics = unique(dayEvents.map((event) => event.knowledgeType).filter(Boolean)).slice(0, 8);
+  const topics = uniqueTruthy(dayEvents.map((event) => event.knowledgeType).filter(Boolean)).slice(0, 8);
   const sourceEventIds = dayEvents.map((event) => event.id).filter(Boolean).slice(-12);
   const stableShape = {
     date,
@@ -377,7 +378,7 @@ export function gateRelationProposal(candidate = {}, {
     : activeByBasis
       ? RelationStatus.ACTIVE
       : RelationStatus.CANDIDATE;
-  const sourceDates = unique([normalized.sourceDate, ...repeated.flatMap((relation) => relation.sourceDates ?? [])]);
+  const sourceDates = uniqueTruthy([normalized.sourceDate, ...repeated.flatMap((relation) => relation.sourceDates ?? [])]);
   const evidence = sanitizeRelationEvidence({
     sourceEventIds: normalized.sourceEventIds,
     sourceExplanationVersionIds: normalized.sourceExplanationVersionIds,
@@ -502,7 +503,7 @@ export function buildReflectionReport({
     if (kind === "daily") return summary.date === date;
     return (!startDate || summary.date >= startDate) && (!endDate || summary.date <= endDate);
   });
-  const conceptNames = unique(selected.flatMap((summary) => (summary.conceptRefs ?? []).map((concept) => concept.canonicalName)));
+  const conceptNames = uniqueTruthy(selected.flatMap((summary) => (summary.conceptRefs ?? []).map((concept) => concept.canonicalName)));
   const concepts = conceptNames.map((name) => conceptProjections[name]).filter(Boolean);
   const repeatedConcepts = concepts
     .filter((projection) => projection.seenCount > 1 || projection.explainedCount > 1)
@@ -533,7 +534,7 @@ export function buildReflectionReport({
       sourceRole: "local_learning_context",
       caution: "not_fact_source"
     }));
-  const topics = unique(selected.flatMap((summary) => summary.topics ?? [])).slice(0, 10);
+  const topics = uniqueTruthy(selected.flatMap((summary) => summary.topics ?? [])).slice(0, 10);
   const sourceSummaryIds = selected.map((summary) => summary.id).filter(Boolean);
   const reportDate = kind === "daily" ? date : `${startDate ?? "start"}_${endDate ?? "end"}`;
   return {
@@ -549,7 +550,7 @@ export function buildReflectionReport({
     repeatedConcepts,
     weakConcepts,
     staleConcepts,
-    reviewSuggestions: unique([...weakConcepts, ...staleConcepts].map((concept) => concept.canonicalName)).slice(0, cfg.reportConceptLimit),
+    reviewSuggestions: uniqueTruthy([...weakConcepts, ...staleConcepts].map((concept) => concept.canonicalName)).slice(0, cfg.reportConceptLimit),
     relationRefs,
     sourceSummaryIds,
     sourceRole: "learning_reflection",
@@ -661,6 +662,3 @@ function overlap(left, right) {
   return false;
 }
 
-function unique(values = []) {
-  return Array.from(new Set(values.filter(Boolean)));
-}

@@ -13,6 +13,8 @@ import {
 } from "../shared/contracts.js";
 import { createProviderAdapterClient } from "./provider-adapters.js";
 import { isTimeoutError, withAbortTimeout } from "../shared/async-control.js";
+// Intentionally path-only: role state diagnostics never carry the endpoint host.
+import { redactUrlPathForLog } from "../shared/redact-util.js";
 import {
   DEFAULT_GATEWAY_PROVIDER_CONFIG,
   createGatewayRuntimeConfig,
@@ -306,21 +308,4 @@ export function unavailableRuntimeProvider(reason, capabilityKind, provider = {}
     modelName: provider.modelName ?? null,
     ...extra
   };
-}
-
-// Intentionally path-only: role state diagnostics never carry the endpoint
-// host. Kept in sync with the gateway server's log redaction until the shared
-// redact-util consolidation (P14).
-function redactUrlPathForLog(value = "") {
-  try {
-    const parsed = new URL(String(value));
-    for (const key of parsed.searchParams.keys()) {
-      if (/token|secret|key|authorization/i.test(key)) {
-        parsed.searchParams.set(key, "<redacted>");
-      }
-    }
-    return `${parsed.pathname}${parsed.search}`.replaceAll("%3Credacted%3E", "<redacted>");
-  } catch {
-    return String(value).replace(/([?&][^=]*(?:token|secret|key|authorization)[^=]*=)[^&]*/gi, "$1<redacted>");
-  }
 }

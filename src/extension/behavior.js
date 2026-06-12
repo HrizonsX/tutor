@@ -170,7 +170,7 @@ export function looksLikeCode(text = "") {
   return looksLikeCodeSelection(text);
 }
 
-function summarizeSelectionValidation(validation = null) {
+export function summarizeSelectionValidation(validation = null) {
   if (!validation) return null;
   return {
     status: validation.status,

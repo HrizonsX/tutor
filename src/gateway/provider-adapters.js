@@ -13,6 +13,7 @@ import {
 } from "../shared/contracts.js";
 import { ConceptRelationType, RelationBasis, RELATION_PROPOSER_VERSION } from "./cognitive-memory.js";
 import { clampText, hashString } from "../shared/privacy.js";
+import { redactUrlForLog } from "../shared/redact-util.js";
 import { inspect } from "node:util";
 
 export const EXPLAIN_JSON_SCHEMA = Object.freeze({
@@ -1495,16 +1496,3 @@ function formatProviderAdapterLogDetails(logger, details = {}) {
   });
 }
 
-function redactUrlForLog(value = "") {
-  try {
-    const parsed = new URL(String(value));
-    for (const key of parsed.searchParams.keys()) {
-      if (/token|secret|key|authorization/i.test(key)) {
-        parsed.searchParams.set(key, "<redacted>");
-      }
-    }
-    return parsed.toString().replaceAll("%3Credacted%3E", "<redacted>");
-  } catch {
-    return String(value).replace(/([?&][^=]*(?:token|secret|key|authorization)[^=]*=)[^&]*/gi, "$1<redacted>");
-  }
-}

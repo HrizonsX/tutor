@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { withTimeout } from "../shared/async-control.js";
+import { trimMicro } from "./composer.js";
 import { DEFAULT_CONFIG, mergeConfig } from "../shared/config.js";
 import {
   AgentCapability,
@@ -1268,12 +1269,6 @@ function normalizeFactSensitivity(value, target) {
     requiresSource: value === FactSensitivity.NEEDS_SOURCE,
     reason: null
   };
-}
-
-function trimMicro(text, config) {
-  const bounded = clampText(text, config.composer.maxMicroChars);
-  const sentences = bounded.match(/[^.!?。！？]+[.!?。！？]?/g) ?? [bounded];
-  return clampText(sentences.slice(0, 2).join(" ").trim(), config.composer.maxMicroChars);
 }
 
 function consumeRateLimit(requestTimes, rateLimit, timestamp) {

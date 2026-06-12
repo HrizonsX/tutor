@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { BROWSER_CONFIG_STORAGE_KEY, loadRuntimeConfig, mergeConfig } from "../shared/config.js";
 import { ReadingContextTracker, isIgnoredReadingSurface } from "./reading-context.js";
-import { BehaviorTracker } from "./behavior.js";
+import { BehaviorTracker, summarizeSelectionValidation } from "./behavior.js";
 import { extractConceptCandidates, normalizeKnowledgeObjectName, validateSelectedConcept } from "../shared/concepts.js";
 import { composeShortExplanation, createComposerInput, regenerateExplanation } from "./composer.js";
 import { classifyFactSensitivity } from "./fact-sensitivity.js";
@@ -915,15 +915,6 @@ function setLastAgentResult(doc, result, devMode = false) {
     versionId: result.id ?? result.explanationVersion?.id ?? result.versionMetadata?.id ?? null,
     timestamp: result.timestamp ?? result.explanationVersion?.timestamp ?? result.versionMetadata?.timestamp ?? null
   });
-}
-
-function summarizeSelectionValidation(validation = null) {
-  if (!validation) return null;
-  return {
-    status: validation.status,
-    reason: validation.reason ?? null,
-    completedBy: validation.completedBy ?? "unknown"
-  };
 }
 
 function isPrimaryPointerEvent(event = {}) {

@@ -11,6 +11,8 @@ import {
   StreamEventType
 } from "../shared/contracts.js";
 import { createLocalAgentRuntime } from "./local-agent-runtime.js";
+// Intentionally path-only: request logs never carry the endpoint host.
+import { redactUrlPathForLog } from "../shared/redact-util.js";
 import { timingSafeEqual } from "node:crypto";
 import { inspect } from "node:util";
 
@@ -144,7 +146,7 @@ export async function startLocalGatewayServer({
     const startedAtIso = new Date(startedAt).toISOString();
     const requestUrl = `http://${host}:${port}${req.url}`;
     const method = req.method ?? "GET";
-    const path = redactUrlForLog(requestUrl);
+    const path = redactUrlPathForLog(requestUrl);
     // End-to-end cancellation: when the browser disconnects mid-response the
     // abort propagates through the handler into streaming lanes and provider
     // calls instead of letting them run to completion unobserved.
@@ -643,18 +645,4 @@ function getPathname(value = "") {
 function clampLogText(value = "", limit = 500) {
   const text = String(value).replace(/\s+/g, " ").trim();
   return text.length > limit ? `${text.slice(0, limit - 1)}...` : text;
-}
-
-function redactUrlForLog(value = "") {
-  try {
-    const parsed = new URL(String(value));
-    for (const key of parsed.searchParams.keys()) {
-      if (/token|secret|key|authorization/i.test(key)) {
-        parsed.searchParams.set(key, "<redacted>");
-      }
-    }
-    return `${parsed.pathname}${parsed.search}`.replaceAll("%3Credacted%3E", "<redacted>");
-  } catch {
-    return String(value).replace(/([?&][^=]*(?:token|secret|key|authorization)[^=]*=)[^&]*/gi, "$1<redacted>");
-  }
 }

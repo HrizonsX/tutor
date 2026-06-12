@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { DEFAULT_CONFIG } from "../shared/config.js";
+import { unique } from "../shared/collection-util.js";
 import {
   AgentCapability,
   AgentRequestGoal,
@@ -739,9 +740,6 @@ function summarizePreRecallDiscovery(discovery = {}, discoveredBridges = []) {
   };
 }
 
-function unique(values = []) {
-  return [...new Set(values)];
-}
 
 function mergeMemoryBridges(existing = [], discovered = []) {
   const seen = new Set();

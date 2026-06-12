@@ -104,6 +104,10 @@ export const FeedbackEventType = Object.freeze({
   MUTE_CATEGORY: MemoryEventType.MUTED_CATEGORY
 });
 
+// Membership set derived from FeedbackEventType so feedback classification
+// cannot drift from the enum.
+export const FEEDBACK_EVENT_TYPES = Object.freeze(new Set(Object.values(FeedbackEventType)));
+
 export const AgentResultStatus = Object.freeze({
   AVAILABLE: "available",
   UNAVAILABLE: "unavailable",

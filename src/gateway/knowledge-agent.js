@@ -1,16 +1,6 @@
 // @ts-nocheck
-import { FactSensitivity, MemoryEventType } from "../shared/contracts.js";
-
-const FEEDBACK_TYPES = new Set([
-  MemoryEventType.MARKED_KNOWN,
-  MemoryEventType.MARKED_CONFUSING,
-  MemoryEventType.MARKED_WRONG,
-  MemoryEventType.REQUESTED_REGENERATION,
-  MemoryEventType.REQUESTED_SIMPLER,
-  MemoryEventType.REQUESTED_MORE_CONTEXT,
-  MemoryEventType.MUTED_OBJECT,
-  MemoryEventType.MUTED_CATEGORY
-]);
+import { FEEDBACK_EVENT_TYPES, FactSensitivity, MemoryEventType } from "../shared/contracts.js";
+import { unique } from "../shared/collection-util.js";
 
 export function curateKnowledgeMemory({
   canonicalName,
@@ -25,7 +15,7 @@ export function curateKnowledgeMemory({
     MemoryEventType.RECENTLY_SEEN,
     MemoryEventType.EXPLANATION_SHOWN
   ].includes(event.type));
-  const feedbackEvents = objectEvents.filter((event) => FEEDBACK_TYPES.has(event.type));
+  const feedbackEvents = objectEvents.filter((event) => FEEDBACK_EVENT_TYPES.has(event.type));
   const explanationEvents = objectEvents.filter((event) => event.type === MemoryEventType.EXPLANATION_SHOWN);
   const relatedObjects = collectRelatedObjects(objectEvents, maxRelatedObjects);
 
@@ -58,7 +48,7 @@ export function buildRetrievalPacket({
 } = {}) {
   const agentSummary = curateKnowledgeMemory({ canonicalName, events, timestamp, maxRelatedObjects });
   const objectEvents = events.filter((event) => event.canonicalName === canonicalName);
-  const feedbackEvents = objectEvents.filter((event) => FEEDBACK_TYPES.has(event.type));
+  const feedbackEvents = objectEvents.filter((event) => FEEDBACK_EVENT_TYPES.has(event.type));
   const priorExplanations = explanationVersions
     .filter((version) => version.target === canonicalName || version.canonicalName === canonicalName)
     .slice(-5);
@@ -120,8 +110,4 @@ function summarizeFeedback(feedbackEvents) {
 
 function inferKnowledgeType(events) {
   return events.find((event) => event.knowledgeType)?.knowledgeType ?? "other";
-}
-
-function unique(values) {
-  return Array.from(new Set(values));
 }

@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { withTimeout } from "../shared/async-control.js";
 import { DEFAULT_CONFIG } from "../shared/config.js";
+import { redactUrlForLog } from "../shared/redact-util.js";
 import {
   AgentCapability,
   AgentProtocolVersion,
@@ -583,17 +584,4 @@ function logGateway(logger, level, event, details = {}) {
   log.call(logger, `[BCO][local-gateway] ${event}`, details);
 }
 
-function redactUrlForLog(value = "") {
-  try {
-    const parsed = new URL(String(value));
-    for (const key of parsed.searchParams.keys()) {
-      if (/token|secret|key|authorization/i.test(key)) {
-        parsed.searchParams.set(key, "<redacted>");
-      }
-    }
-    return parsed.toString().replaceAll("%3Credacted%3E", "<redacted>");
-  } catch {
-    return String(value).replace(/([?&][^=]*(?:token|secret|key|authorization)[^=]*=)[^&]*/gi, "$1<redacted>");
-  }
-}
 

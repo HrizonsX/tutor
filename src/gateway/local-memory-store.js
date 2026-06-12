@@ -3,10 +3,12 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { DEFAULT_CONFIG, mergeConfig } from "../shared/config.js";
+import { uniqueTruthy } from "../shared/collection-util.js";
 import {
   AgentResultStatus,
   DerivedSignal,
   ExplanationStyle,
+  FEEDBACK_EVENT_TYPES,
   MemoryEventType,
   MemoryRepositoryMode
 } from "../shared/contracts.js";
@@ -49,17 +51,6 @@ const SQLITE_FILE = "local-memory.sqlite";
 const SQLITE_SCHEMA_VERSION = 2;
 const MAX_EVIDENCE_IDS = 12;
 const require = createRequire(import.meta.url);
-const FEEDBACK_TYPES = new Set([
-  MemoryEventType.MARKED_KNOWN,
-  MemoryEventType.MARKED_CONFUSING,
-  MemoryEventType.MARKED_WRONG,
-  MemoryEventType.REQUESTED_REGENERATION,
-  MemoryEventType.REQUESTED_SIMPLER,
-  MemoryEventType.REQUESTED_MORE_CONTEXT,
-  MemoryEventType.MUTED_OBJECT,
-  MemoryEventType.MUTED_CATEGORY
-]);
-
 export function createLocalMemoryStore({
   schemaVersion = DEFAULT_CONFIG.memory.schemaVersion,
   config = DEFAULT_CONFIG,
@@ -241,7 +232,7 @@ export function createLocalMemoryStore({
     scheduleRelationDiscovery({ target = null, relationProposer = null, explanationVersion = null, currentContext = null } = {}) {
       const canonicalName = normalizeKnowledgeObjectName(target?.canonicalName ?? target ?? "");
       if (!canonicalName) return null;
-      data.cognitiveMemory.relationDiscovery.backlogTargets = unique([
+      data.cognitiveMemory.relationDiscovery.backlogTargets = uniqueTruthy([
         ...(data.cognitiveMemory.relationDiscovery.backlogTargets ?? []),
         canonicalName
       ]);
@@ -403,7 +394,7 @@ export function createLocalMemoryStore({
       return stored;
     },
     listStaleTargets() {
-      return unique([
+      return uniqueTruthy([
         ...(data.summarizer.backlogTargets ?? []),
         ...(data.summarizer.staleTargets ?? [])
       ]);
@@ -837,7 +828,7 @@ export function createLocalMemoryStore({
 
   function persistSqliteSummarizerState() {
     if (!runtime.sqlite) return;
-    const targets = unique([
+    const targets = uniqueTruthy([
       ...(data.summarizer.backlogTargets ?? []),
       ...(data.summarizer.staleTargets ?? [])
     ]);
@@ -920,7 +911,7 @@ export function createLocalMemoryStore({
       }
       // Re-queue while a backlog remains so a burst larger than one batch
       // still drains without waiting for the next write.
-      const remaining = unique([
+      const remaining = uniqueTruthy([
         ...(data.summarizer.backlogTargets ?? []),
         ...(data.summarizer.staleTargets ?? [])
       ]);
@@ -971,7 +962,7 @@ export function createLocalMemoryStore({
   }
 
   function processStaleTargets({ limit = Infinity, includeSummaries = false } = {}) {
-    const targets = unique([
+    const targets = uniqueTruthy([
       ...(data.summarizer.backlogTargets ?? []),
       ...(data.summarizer.staleTargets ?? [])
     ]).slice(0, limit);
@@ -999,8 +990,8 @@ export function createLocalMemoryStore({
   function markTargetStale(canonicalName = "") {
     const target = normalizeKnowledgeObjectName(canonicalName);
     if (!target) return;
-    data.summarizer.backlogTargets = unique([...(data.summarizer.backlogTargets ?? []), target]);
-    data.summarizer.staleTargets = unique([...(data.summarizer.staleTargets ?? []), target]);
+    data.summarizer.backlogTargets = uniqueTruthy([...(data.summarizer.backlogTargets ?? []), target]);
+    data.summarizer.staleTargets = uniqueTruthy([...(data.summarizer.staleTargets ?? []), target]);
   }
 
   function removeStaleTarget(canonicalName = "") {
@@ -1099,13 +1090,13 @@ export function createLocalMemoryStore({
   function markCognitiveMemoryStale(canonicalName = "", timestamp = now()) {
     const target = normalizeKnowledgeObjectName(canonicalName);
     if (target) {
-      data.cognitiveMemory.relationDiscovery.backlogTargets = unique([
+      data.cognitiveMemory.relationDiscovery.backlogTargets = uniqueTruthy([
         ...(data.cognitiveMemory.relationDiscovery.backlogTargets ?? []),
         target
       ]);
     }
     const date = toMemoryDate(timestamp);
-    data.cognitiveMemory.staleDates = unique([...(data.cognitiveMemory.staleDates ?? []), date]);
+    data.cognitiveMemory.staleDates = uniqueTruthy([...(data.cognitiveMemory.staleDates ?? []), date]);
   }
 
   function rebuildConceptProjection(canonicalName = "", { summary = null } = {}) {
@@ -1128,7 +1119,7 @@ export function createLocalMemoryStore({
   }
 
   function rebuildDailySummary(date = toMemoryDate(now())) {
-    const allNames = unique([
+    const allNames = uniqueTruthy([
       ...data.events.map((event) => event.canonicalName).filter(Boolean),
       ...data.profileEvents.map((event) => event.canonicalName).filter(Boolean),
       ...data.explanationVersions.map((version) => version.target).filter(Boolean),
@@ -1153,7 +1144,7 @@ export function createLocalMemoryStore({
   }
 
   function rebuildStaleDailySummaries() {
-    const dates = unique(data.cognitiveMemory.staleDates ?? []);
+    const dates = uniqueTruthy(data.cognitiveMemory.staleDates ?? []);
     for (const date of dates) rebuildDailySummary(date);
   }
 
@@ -1204,7 +1195,7 @@ export function createLocalMemoryStore({
     else data.cognitiveMemory.relationProposals.push(stored);
     persistSqliteRelationProposal(stored);
     for (const date of stored.sourceDates ?? []) {
-      data.cognitiveMemory.staleDates = unique([...(data.cognitiveMemory.staleDates ?? []), date]);
+      data.cognitiveMemory.staleDates = uniqueTruthy([...(data.cognitiveMemory.staleDates ?? []), date]);
     }
     return stored;
   }
@@ -1779,7 +1770,7 @@ export function createLocalMemoryStore({
   }
 
   function summarizeRuntimeState() {
-    const staleTargets = unique([
+    const staleTargets = uniqueTruthy([
       ...(data.summarizer.backlogTargets ?? []),
       ...(data.summarizer.staleTargets ?? [])
     ]);
@@ -2269,7 +2260,7 @@ function readSQLiteStoreData(db, schemaVersion) {
     .map((row) => parseJson(row.report_json, null))
     .filter(Boolean);
   const jobs = allSqlite(db, "SELECT * FROM summarizer_jobs WHERE status != 'done'");
-  data.summarizer.backlogTargets = unique(jobs.map((job) => job.canonical_name));
+  data.summarizer.backlogTargets = uniqueTruthy(jobs.map((job) => job.canonical_name));
   data.summarizer.staleTargets = [...data.summarizer.backlogTargets];
   const failed = jobs.find((job) => job.status === "failed");
   data.summarizer.lastError = failed?.reason ?? null;
@@ -2316,7 +2307,7 @@ function allSqlite(db, sql, params = []) {
 }
 
 function buildFtsMatchExpression(values = []) {
-  const terms = unique(values
+  const terms = uniqueTruthy(values
     .flatMap((value) => String(value ?? "").split(/[\s,.;:!?()[\]{}"'，。；：！？、（）【】《》]+/u))
     .map((term) => term.replace(/[^\p{L}\p{N}_-]+/gu, "").trim())
     .filter((term) => term.length >= 2)
@@ -2325,7 +2316,7 @@ function buildFtsMatchExpression(values = []) {
 }
 
 function buildFtsLikeTerms(values = []) {
-  return unique(values
+  return uniqueTruthy(values
     .flatMap((value) => [
       String(value ?? ""),
       ...String(value ?? "").split(/[\s,.;:!?()[\]{}"'，。；：！？、（）【】《》]+/u)
@@ -2346,7 +2337,7 @@ function expandFtsText(value = "") {
       }
     }
   }
-  return unique([text, ...grams]).join(" ");
+  return uniqueTruthy([text, ...grams]).join(" ");
 }
 
 function disposeStatement(statement) {
@@ -2391,7 +2382,7 @@ function normalizeStoreData(data = {}, schemaVersion) {
 }
 
 function initializeStaleTargets(data) {
-  const targets = unique([
+  const targets = uniqueTruthy([
     ...data.events.map((event) => event.canonicalName).filter(Boolean),
     ...data.profileEvents.map((event) => event.canonicalName).filter(Boolean),
     ...data.explanationVersions.map((version) => version.target).filter(Boolean),
@@ -2403,15 +2394,15 @@ function initializeStaleTargets(data) {
       summary.summarizerVersion !== LOCAL_MEMORY_SUMMARIZER_VERSION ||
       summary.schemaVersion !== data.schemaVersion;
   });
-  data.summarizer.backlogTargets = unique([...(data.summarizer.backlogTargets ?? []), ...stale]);
-  data.summarizer.staleTargets = unique([...(data.summarizer.staleTargets ?? []), ...stale]);
-  const dates = unique([
+  data.summarizer.backlogTargets = uniqueTruthy([...(data.summarizer.backlogTargets ?? []), ...stale]);
+  data.summarizer.staleTargets = uniqueTruthy([...(data.summarizer.staleTargets ?? []), ...stale]);
+  const dates = uniqueTruthy([
     ...data.events.map((event) => toMemoryDate(event.timestamp)),
     ...data.profileEvents.map((event) => toMemoryDate(event.timestamp)),
     ...data.explanationVersions.map((version) => toMemoryDate(version.timestamp))
   ]);
   const staleDates = dates.filter((date) => !data.cognitiveMemory.dailySummaries[date]);
-  data.cognitiveMemory.staleDates = unique([...(data.cognitiveMemory.staleDates ?? []), ...staleDates]);
+  data.cognitiveMemory.staleDates = uniqueTruthy([...(data.cognitiveMemory.staleDates ?? []), ...staleDates]);
 }
 
 // Exported so the layered repository can normalize once and write the same
@@ -2423,7 +2414,7 @@ export function normalizeMemoryEvent(event = {}, { repository, config, now, inde
     event.explanationVersionId ||
     event.requestedStyle ||
     event.previousExplanationVersionId ||
-    FEEDBACK_TYPES.has(event.type);
+    FEEDBACK_EVENT_TYPES.has(event.type);
   const context = needsKnowledgeContext
     ? sanitizeKnowledgeContext({
         ...(event.context ?? {}),
@@ -2583,10 +2574,10 @@ function deriveProfileHints(events, profileEvents, config) {
   const known = allEvents.filter((event) => event.type === MemoryEventType.MARKED_KNOWN);
   const wrong = allEvents.filter((event) => event.type === MemoryEventType.MARKED_WRONG);
   const mutedObject = allEvents.some((event) => event.type === MemoryEventType.MUTED_OBJECT);
-  const mutedKnowledgeTypes = unique(allEvents
+  const mutedKnowledgeTypes = uniqueTruthy(allEvents
     .filter((event) => event.type === MemoryEventType.MUTED_CATEGORY && event.knowledgeType)
     .map((event) => event.knowledgeType));
-  const difficultKnowledgeTypes = unique(confusing
+  const difficultKnowledgeTypes = uniqueTruthy(confusing
     .filter((event) => event.knowledgeType)
     .map((event) => event.knowledgeType));
   const preferredStyle = simpler.length >= (config.profile?.stylePreferenceThreshold ?? 2)
@@ -2616,11 +2607,11 @@ function deriveProfileHints(events, profileEvents, config) {
 function mergeProfileHintsForTarget(globalHints = {}, targetHints = {}, { knowledgeType = null } = {}) {
   const scopedGlobal = scopeProfileHintsToKnowledgeType(globalHints, { knowledgeType, global: true });
   const scopedTarget = scopeProfileHintsToKnowledgeType(targetHints, { knowledgeType, global: false });
-  const mutedKnowledgeTypes = unique([
+  const mutedKnowledgeTypes = uniqueTruthy([
     ...(scopedGlobal.mutedKnowledgeTypes ?? []),
     ...(scopedTarget.mutedKnowledgeTypes ?? [])
   ]);
-  const difficultKnowledgeTypes = unique([
+  const difficultKnowledgeTypes = uniqueTruthy([
     ...(scopedGlobal.difficultKnowledgeTypes ?? []),
     ...(scopedTarget.difficultKnowledgeTypes ?? [])
   ]);
@@ -2682,7 +2673,7 @@ function latestKnowledgeTypeForConcept(canonicalName = "", events = []) {
 
 function deriveInterestProfile(events = [], conceptProjections = {}, config = DEFAULT_CONFIG) {
   const conceptLimit = Math.min(20, config.memory?.cognitive?.reportConceptLimit ?? 12);
-  const recentConcepts = unique(events
+  const recentConcepts = uniqueTruthy(events
     .filter((event) => event.canonicalName)
     .sort((left, right) => Number(right.timestamp ?? 0) - Number(left.timestamp ?? 0))
     .map((event) => event.canonicalName))
@@ -2908,6 +2899,3 @@ function unavailableMemory(reason, extra = {}) {
   };
 }
 
-function unique(values = []) {
-  return Array.from(new Set(values.filter(Boolean)));
-}
