@@ -107,6 +107,44 @@ export function createPostgresMemoryClient({
         lastCheckedAt
       };
     },
+    // Startup hydration source: Postgres is the durable source of truth, so
+    // a restarted gateway replays these records into the local projection.
+    async readAllRecords({ limit = 50000 } = {}) {
+      const unavailable = await ensureAvailable();
+      if (unavailable) return unavailable;
+      const readTable = async (table, orderColumn) => {
+        const result = await activePool.query(
+          `SELECT record_json FROM ${safeSchema}.${table} ORDER BY ${orderColumn} ASC LIMIT $1`,
+          [limit]
+        );
+        return (result.rows ?? [])
+          .map((row) => (typeof row.record_json === "string" ? parseJsonSafe(row.record_json) : row.record_json))
+          .filter(Boolean);
+      };
+      try {
+        return {
+          status: AgentResultStatus.AVAILABLE,
+          events: await readTable("raw_memory_events", "timestamp"),
+          explanationVersions: await readTable("explanation_versions", "timestamp"),
+          memoryCandidates: await readTable("memory_candidates", "timestamp"),
+          relationRecords: await readTable("relation_records", "created_at")
+        };
+      } catch (error) {
+        return unavailablePostgresResult("layered_postgres_read_failed", error);
+      }
+    },
+    async countOutboxPending() {
+      const unavailable = await ensureAvailable();
+      if (unavailable) return null;
+      try {
+        const result = await activePool.query(
+          `SELECT COUNT(*) AS count FROM ${safeSchema}.memory_outbox_events WHERE status != 'processed'`
+        );
+        return Number(result.rows?.[0]?.count ?? 0);
+      } catch {
+        return null;
+      }
+    },
     async writeEventTransaction({ event = {}, outboxEvent = {}, concept = null, alias = null } = {}) {
       const unavailable = await ensureAvailable();
       if (unavailable) return unavailable;
@@ -580,6 +618,15 @@ function normalizeRepositoryMode(value = "sqlite") {
   if (value === "layered") return "layered";
   if (value === "memory") return "memory";
   return "sqlite";
+}
+
+function parseJsonSafe(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    // Skip corrupt rows during hydration instead of failing the whole replay.
+    return null;
+  }
 }
 
 function unavailablePostgresResult(reason, error = null) {

@@ -2,7 +2,13 @@
 import { DEFAULT_CONFIG, mergeConfig } from "./config.js";
 import { AgentResultStatus, MemoryEventType, MemoryRepositoryMode } from "./contracts.js";
 import { normalizeKnowledgeObjectName } from "./concepts.js";
-import { createLocalMemoryStore } from "./local-memory-store.js";
+import {
+  createCandidateFromEvent,
+  createLocalMemoryStore,
+  normalizeExplanation,
+  normalizeMemoryCandidate,
+  normalizeMemoryEvent
+} from "./local-memory-store.js";
 
 export const LayeredMemoryRepositoryStoreMode = "layered";
 export const VectorRecallMode = Object.freeze({
@@ -120,6 +126,18 @@ export function createInMemoryPostgresMemoryClient({ schemaVersion = DEFAULT_CON
       }
       return { processed: pending.length, failed: 0 };
     },
+    readAllRecords({ limit = 50000 } = {}) {
+      return {
+        status: AgentResultStatus.AVAILABLE,
+        events: tables.rawMemoryEvents.slice(0, limit),
+        explanationVersions: tables.explanationVersions.slice(0, limit),
+        memoryCandidates: tables.memoryCandidates.slice(0, limit),
+        relationRecords: tables.relationRecords.slice(0, limit)
+      };
+    },
+    countOutboxPending() {
+      return tables.outboxEvents.filter((event) => event.status !== "processed").length;
+    },
     close() {}
   };
 }
@@ -194,89 +212,100 @@ export function createLayeredMemoryRepository({
     now,
     autoProcessBacklog: false
   });
+  const hydration = { hydrated: false, recordCounts: null, error: null };
+  const outboxState = { pendingCount: null, failedCount: 0, lastProcessedAt: null };
 
   const repository = {
     mode: MemoryRepositoryMode.LOCAL_GATEWAY,
     shared: true,
     storeMode: LayeredMemoryRepositoryStoreMode,
     persistent: true,
-    ready: Promise.all([
-      postgres?.ready,
-      sessionView?.ready,
-      vectorRecall?.ready
-    ].filter(Boolean)).catch(() => null),
+    ready: null,
     updateConfig(nextConfig = {}) {
       effectiveConfig = mergeConfig(effectiveConfig, nextConfig);
       localProjection.updateConfig?.(nextConfig);
       return { status: AgentResultStatus.AVAILABLE };
     },
-    writeEvent(payload = {}) {
-      const unavailable = unavailableIfPostgresMissing();
+    // Durable-source-first writes: each record is normalized exactly once,
+    // written to Postgres, and only ingested into the projection after the
+    // durable write succeeds. A Postgres failure returns a structured
+    // UNAVAILABLE without leaving projection-only state behind.
+    async writeEvent(payload = {}) {
+      const unavailable = await unavailableIfPostgresMissing();
       if (unavailable) return unavailable;
-      const stored = localProjection.writeEvent(payload);
-      if (stored?.status === AgentResultStatus.UNAVAILABLE) return stored;
+      const repositoryName = payload.repository ?? "learning";
+      const stored = normalizeMemoryEvent(payload.event ?? payload, {
+        repository: repositoryName,
+        config: effectiveConfig,
+        now,
+        index: 0
+      });
+      const candidate = createCandidateFromEvent(stored);
+      const storedCandidate = candidate
+        ? normalizeMemoryCandidate(candidate, { config: effectiveConfig, now, index: 0 })
+        : null;
       const outboxEvent = createOutboxEvent("memory_event", stored, now());
-      const persisted = postgres.writeEventTransaction?.({
+      const persisted = await postgres.writeEventTransaction?.({
         event: stored,
         outboxEvent,
         concept: conceptRecordFor(stored),
         alias: aliasRecordFor(stored)
       });
-      return after(persisted, (persistResult) => {
-        if (persistResult?.status === AgentResultStatus.UNAVAILABLE) return persistResult;
-        const sessionResult = sessionView.recordEvent?.({
-          sessionId: payload.sessionId,
-          canonicalName: stored.canonicalName,
-          type: stored.type,
-          timestamp: stored.timestamp
-        });
-        return after(sessionResult, (resolvedSessionResult) => ({
-          ...stored,
-          sessionStatus: resolvedSessionResult?.status ?? AgentResultStatus.AVAILABLE
-        }));
+      if (persisted?.status === AgentResultStatus.UNAVAILABLE) return persisted;
+      if (storedCandidate) {
+        const candidatePersisted = await postgres.writeMemoryCandidate?.(storedCandidate);
+        if (candidatePersisted?.status === AgentResultStatus.UNAVAILABLE) return candidatePersisted;
+      }
+      localProjection.ingestNormalizedEvent?.(stored);
+      if (storedCandidate) localProjection.ingestNormalizedMemoryCandidate?.(storedCandidate);
+      const sessionResult = await sessionView.recordEvent?.({
+        sessionId: payload.sessionId,
+        canonicalName: stored.canonicalName,
+        type: stored.type,
+        timestamp: stored.timestamp
       });
+      return {
+        ...stored,
+        sessionStatus: sessionResult?.status ?? AgentResultStatus.AVAILABLE
+      };
     },
-    writeExplanationVersion(version = {}) {
-      const unavailable = unavailableIfPostgresMissing();
+    async writeExplanationVersion(version = {}) {
+      const unavailable = await unavailableIfPostgresMissing();
       if (unavailable) return unavailable;
-      const stored = localProjection.writeExplanationVersion(version);
-      if (stored?.status === AgentResultStatus.UNAVAILABLE) return stored;
-      const persisted = postgres.writeExplanationVersion?.(stored);
-      return after(persisted, (persistResult) => {
-        if (persistResult?.status === AgentResultStatus.UNAVAILABLE) return persistResult;
-        const sessionResult = sessionView.recordEvent?.({
-          sessionId: version.sessionId,
-          canonicalName: stored.target,
-          type: MemoryEventType.EXPLANATION_SHOWN,
-          timestamp: stored.timestamp
-        });
-        return after(sessionResult, () => stored);
+      const stored = normalizeExplanation(version, { config: effectiveConfig, now, index: 0 });
+      const persisted = await postgres.writeExplanationVersion?.(stored);
+      if (persisted?.status === AgentResultStatus.UNAVAILABLE) return persisted;
+      localProjection.ingestNormalizedExplanationVersion?.(stored);
+      await sessionView.recordEvent?.({
+        sessionId: version.sessionId,
+        canonicalName: stored.target,
+        type: MemoryEventType.EXPLANATION_SHOWN,
+        timestamp: stored.timestamp
       });
+      return stored;
     },
-    writeMemoryCandidate(candidate = {}) {
-      const unavailable = unavailableIfPostgresMissing();
+    async writeMemoryCandidate(candidate = {}) {
+      const unavailable = await unavailableIfPostgresMissing();
       if (unavailable) return unavailable;
-      const stored = localProjection.writeMemoryCandidate(candidate);
-      if (stored?.status === AgentResultStatus.UNAVAILABLE) return stored;
-      const persisted = postgres.writeMemoryCandidate?.(stored);
-      return after(persisted, (persistResult) => {
-        if (persistResult?.status === AgentResultStatus.UNAVAILABLE) return persistResult;
-        return stored;
-      });
+      const stored = normalizeMemoryCandidate(candidate, { config: effectiveConfig, now, index: 0 });
+      const persisted = await postgres.writeMemoryCandidate?.(stored);
+      if (persisted?.status === AgentResultStatus.UNAVAILABLE) return persisted;
+      localProjection.ingestNormalizedMemoryCandidate?.(stored);
+      return stored;
     },
-    gateRelationProposal(proposal = {}, options = {}) {
-      const unavailable = unavailableIfPostgresMissing({ capabilityKind: "memory_event_write" });
+    async gateRelationProposal(proposal = {}, options = {}) {
+      const unavailable = await unavailableIfPostgresMissing({ capabilityKind: "memory_event_write" });
       if (unavailable) return unavailable;
-      const stored = localProjection.gateRelationProposal?.(proposal, options);
-      if (stored?.status === AgentResultStatus.UNAVAILABLE) return stored;
-      const persisted = postgres.writeRelationRecord?.(stored);
-      return after(persisted, (persistResult) => {
-        if (persistResult?.status === AgentResultStatus.UNAVAILABLE) return persistResult;
-        return stored;
-      });
+      const gated = localProjection.previewRelationProposal?.(proposal, options);
+      if (!gated || gated.status === AgentResultStatus.UNAVAILABLE) return gated ?? null;
+      const persisted = await postgres.writeRelationRecord?.(gated);
+      if (persisted?.status === AgentResultStatus.UNAVAILABLE) return persisted;
+      return localProjection.ingestRelationRecord?.(gated) ?? gated;
     },
     queryMemory(query = {}) {
-      const unavailable = unavailableIfPostgresMissing({ capabilityKind: "memory_query", memoryPacket: null });
+      // Stays synchronous when all layers are synchronous (the established
+      // contract); availability is checked without awaiting postgres.ready.
+      const unavailable = unavailableIfPostgresMissingSync({ capabilityKind: "memory_query", memoryPacket: null });
       if (unavailable) return unavailable;
       const timestamp = query.timestamp ?? now();
       const packet = localProjection.queryMemory(query);
@@ -324,19 +353,20 @@ export function createLayeredMemoryRepository({
         });
       });
     },
-    processOutbox({ limit = Infinity } = {}) {
-      const unavailable = unavailableIfPostgresMissing({ capabilityKind: "memory_query" });
+    async processOutbox({ limit = Infinity } = {}) {
+      const unavailable = await unavailableIfPostgresMissing({ capabilityKind: "memory_query" });
       if (unavailable) return unavailable;
-      const result = postgres.processOutboxBatch?.({ limit, timestamp: now() }) ?? { processed: 0, failed: 0 };
-      return after(result, (resolvedResult) => {
-        if (resolvedResult?.status === AgentResultStatus.UNAVAILABLE) return resolvedResult;
-        localProjection.processBacklog?.({ limit });
-        return {
-          status: AgentResultStatus.AVAILABLE,
-          processed: resolvedResult.processed ?? 0,
-          failed: resolvedResult.failed ?? 0
-        };
-      });
+      const resolvedResult = await (postgres.processOutboxBatch?.({ limit, timestamp: now() }) ?? { processed: 0, failed: 0 });
+      if (resolvedResult?.status === AgentResultStatus.UNAVAILABLE) return resolvedResult;
+      localProjection.processBacklog?.({ limit });
+      outboxState.failedCount = resolvedResult.failed ?? 0;
+      outboxState.lastProcessedAt = now();
+      await refreshOutboxPendingCount();
+      return {
+        status: AgentResultStatus.AVAILABLE,
+        processed: resolvedResult.processed ?? 0,
+        failed: resolvedResult.failed ?? 0
+      };
     },
     getHealth() {
       const postgresHealth = postgres?.getHealth?.() ?? {
@@ -366,7 +396,17 @@ export function createLayeredMemoryRepository({
           postgres: redactLayerHealth(postgresHealth),
           redis: redactLayerHealth(sessionHealth),
           vectorRecall: redactLayerHealth(vectorHealth),
-          outbox: summarizeOutbox(postgres)
+          outbox: {
+            status: outboxState.pendingCount === null
+              ? "unknown"
+              : outboxState.failedCount > 0
+                ? "degraded"
+                : AgentResultStatus.AVAILABLE,
+            pendingCount: outboxState.pendingCount ?? 0,
+            failedCount: outboxState.failedCount,
+            lastProcessedAt: outboxState.lastProcessedAt
+          },
+          hydration: { ...hydration }
         }
       };
     },
@@ -383,37 +423,97 @@ export function createLayeredMemoryRepository({
     }
   };
 
-  for (const key of [
-    "readConceptProjection",
-    "writeDailySummary",
-    "readDailySummary",
-    "listDailySummaries",
-    "generateDailySummary",
-    "selectRelevantDays",
-    "loadDayConceptBlocks",
-    "queryActiveRelations",
-    "planOverlayRecall",
-    "scheduleRelationDiscovery",
-    "runRelationDiscovery",
-    "generateDailyReport",
-    "generateWeeklyReport",
-    "readTargetEvidence",
-    "readDerivedSummary",
-    "writeDerivedSummary",
-    "listStaleTargets",
-    "processBacklog"
-  ]) {
-    if (typeof localProjection[key] === "function" && !repository[key]) {
-      repository[key] = (...args) => localProjection[key](...args);
+  // Dynamic delegation: every projection capability that the repository does
+  // not explicitly own is forwarded automatically. The old hand-maintained
+  // whitelist silently dropped newer methods (pre-recall bridge discovery,
+  // profile summaries, related concept hints) when layered mode was selected.
+  const OVERRIDDEN_METHODS = new Set([
+    "writeEvent",
+    "writeExplanationVersion",
+    "writeMemoryCandidate",
+    "gateRelationProposal",
+    "queryMemory",
+    "processOutbox",
+    "updateConfig",
+    "getHealth",
+    "close"
+  ]);
+  for (const key of Object.keys(localProjection)) {
+    if (typeof localProjection[key] !== "function") continue;
+    if (OVERRIDDEN_METHODS.has(key) || repository[key]) continue;
+    repository[key] = (...args) => localProjection[key](...args);
+  }
+
+  repository.ready = initialize();
+  return repository;
+
+  // Hydration: Postgres is the durable source of truth, so a restarted
+  // gateway replays its records into the fresh local projection before
+  // serving recall. Without this, layered mode restarted from zero while
+  // Postgres accumulated rows that were never read back.
+  async function initialize() {
+    await Promise.all([
+      postgres?.ready,
+      sessionView?.ready,
+      vectorRecall?.ready
+    ].filter(Boolean)).catch(() => null);
+    if (!isPostgresAvailable()) return;
+    try {
+      const records = await postgres.readAllRecords?.({ limit: 50000 });
+      if (!records || records.status === AgentResultStatus.UNAVAILABLE) {
+        hydration.error = records?.reason ?? null;
+        return;
+      }
+      for (const event of records.events ?? []) {
+        localProjection.ingestNormalizedEvent?.(event);
+      }
+      for (const version of records.explanationVersions ?? []) {
+        localProjection.ingestNormalizedExplanationVersion?.(version);
+      }
+      for (const candidate of records.memoryCandidates ?? []) {
+        localProjection.ingestNormalizedMemoryCandidate?.(candidate);
+      }
+      for (const relation of records.relationRecords ?? []) {
+        localProjection.ingestRelationRecord?.(relation);
+      }
+      localProjection.processBacklog?.({});
+      hydration.hydrated = true;
+      hydration.recordCounts = {
+        events: records.events?.length ?? 0,
+        explanationVersions: records.explanationVersions?.length ?? 0,
+        memoryCandidates: records.memoryCandidates?.length ?? 0,
+        relationRecords: records.relationRecords?.length ?? 0
+      };
+    } catch (error) {
+      hydration.error = error?.message ?? String(error);
+    }
+    await refreshOutboxPendingCount();
+  }
+
+  async function refreshOutboxPendingCount() {
+    try {
+      const count = await postgres?.countOutboxPending?.();
+      outboxState.pendingCount = typeof count === "number" ? count : null;
+    } catch {
+      outboxState.pendingCount = null;
     }
   }
 
-  return repository;
-
-  function unavailableIfPostgresMissing(extra = {}) {
+  function isPostgresAvailable() {
     const health = postgres?.getHealth?.();
-    const available = postgres?.available === true || health?.status === AgentResultStatus.AVAILABLE || health?.status === "available";
-    if (available) return null;
+    return postgres?.available === true || health?.status === AgentResultStatus.AVAILABLE || health?.status === "available";
+  }
+
+  async function unavailableIfPostgresMissing(extra = {}) {
+    // Awaiting ready first prevents the startup race where writes during
+    // pool initialization were misreported as layered_postgres_unconfigured.
+    if (postgres?.ready) await Promise.resolve(postgres.ready).catch(() => null);
+    return unavailableIfPostgresMissingSync(extra);
+  }
+
+  function unavailableIfPostgresMissingSync(extra = {}) {
+    if (isPostgresAvailable()) return null;
+    const health = postgres?.getHealth?.();
     const reason = health?.reason ?? "layered_postgres_unconfigured";
     return {
       status: AgentResultStatus.UNAVAILABLE,
@@ -528,17 +628,6 @@ function redactLayerHealth(health = {}) {
     ...health,
     connectionString: health.connectionString ? "<redacted>" : undefined,
     url: health.url ? "<redacted>" : undefined
-  };
-}
-
-function summarizeOutbox(postgres) {
-  const rows = postgres?.tables?.outboxEvents;
-  if (!Array.isArray(rows)) return { status: "unknown", pendingCount: 0, failedCount: 0, lastProcessedAt: null };
-  return {
-    status: rows.some((row) => row.status === "failed") ? "degraded" : AgentResultStatus.AVAILABLE,
-    pendingCount: rows.filter((row) => row.status === "pending").length,
-    failedCount: rows.filter((row) => row.status === "failed").length,
-    lastProcessedAt: rows.filter((row) => row.processedAt).at(-1)?.processedAt ?? null
   };
 }
 

@@ -152,20 +152,84 @@ export function createLocalMemoryStore({
     },
     gateRelationProposal(proposal = {}, options = {}) {
       if (!runtime.available) return unavailableMemory(runtime.reason, { capabilityKind: "memory_event_write" });
+      const gated = this.previewRelationProposal(proposal, options);
+      if (gated?.status === AgentResultStatus.UNAVAILABLE) return gated;
+      return upsertRelationProposal(gated);
+    },
+    // Gate without persistence: the layered repository runs the gate against
+    // projection state, writes Postgres first, then ingests on success.
+    previewRelationProposal(proposal = {}, options = {}) {
+      if (!runtime.available) return unavailableMemory(runtime.reason, { capabilityKind: "memory_event_write" });
       const dayBlocks = options.dayBlocks ?? buildDayConceptBlocks({
         dates: [proposal.sourceDate].filter(Boolean),
         dailySummaries: Object.values(data.cognitiveMemory.dailySummaries),
         conceptProjections: data.cognitiveMemory.conceptProjections,
         relations: data.cognitiveMemory.relationProposals
       });
-      const gated = gateRelationProposal(proposal, {
+      return gateRelationProposal(proposal, {
         dayBlocks,
         existingRelations: data.cognitiveMemory.relationProposals,
         timestamp: options.timestamp ?? now(),
         targetConcept: options.targetConcept ?? options.canonicalName ?? "",
         config
       });
-      return upsertRelationProposal(gated);
+    },
+    // Replay path for already-gated relation records (e.g. hydration from
+    // Postgres): upserts by id without re-running the threshold gate, so an
+    // ACTIVE relation cannot be demoted by replay. Idempotent.
+    ingestRelationRecord(relation = {}) {
+      if (!runtime.available) return unavailableMemory(runtime.reason, { capabilityKind: "memory_event_write" });
+      if (!relation?.id) return null;
+      return upsertRelationProposal(relation);
+    },
+    // Ingest entries for records that were already normalized (the layered
+    // repository normalizes once and writes the identical record to Postgres
+    // and this projection). Bypassing writeEvent's re-normalization matters:
+    // it would re-derive index-based ids and produce divergent records.
+    ingestNormalizedEvent(stored = {}, { deriveCandidate = false } = {}) {
+      if (!runtime.available) return unavailableMemory(runtime.reason, { capabilityKind: "memory_event_write" });
+      if (!stored?.id) return null;
+      const exists = stored.repository === "profile"
+        ? data.profileEvents.some((event) => event.id === stored.id)
+        : data.events.some((event) => event.id === stored.id);
+      if (exists) return { event: stored, candidate: null };
+      const candidate = deriveCandidate ? createCandidateFromEvent(stored) : null;
+      const storedCandidate = candidate
+        ? normalizeMemoryCandidate(candidate, { config, now, index: data.memoryCandidates.length })
+        : null;
+      withSqliteTransaction(() => {
+        writeSqliteRawEvent(stored);
+        if (storedCandidate) writeSqliteMemoryCandidate(storedCandidate);
+      });
+      if (stored.repository === "profile") data.profileEvents.push(stored);
+      else data.events.push(stored);
+      if (storedCandidate) data.memoryCandidates.push(storedCandidate);
+      markTargetStale(stored.canonicalName);
+      markCognitiveMemoryStale(stored.canonicalName, stored.timestamp);
+      scheduleSummarization();
+      return { event: stored, candidate: storedCandidate };
+    },
+    ingestNormalizedExplanationVersion(stored = {}) {
+      if (!runtime.available) return unavailableMemory(runtime.reason, { capabilityKind: "memory_event_write" });
+      if (!stored?.id) return null;
+      if (data.explanationVersions.some((version) => version.id === stored.id)) return stored;
+      withSqliteTransaction(() => writeSqliteExplanationVersion(stored));
+      data.explanationVersions.push(stored);
+      markTargetStale(stored.target);
+      markCognitiveMemoryStale(stored.target, stored.timestamp);
+      scheduleSummarization();
+      return stored;
+    },
+    ingestNormalizedMemoryCandidate(stored = {}) {
+      if (!runtime.available) return unavailableMemory(runtime.reason, { capabilityKind: "memory_event_write" });
+      if (!stored?.id) return null;
+      if (data.memoryCandidates.some((candidate) => candidate.id === stored.id)) return stored;
+      withSqliteTransaction(() => writeSqliteMemoryCandidate(stored));
+      data.memoryCandidates.push(stored);
+      markTargetStale(stored.canonicalName);
+      markCognitiveMemoryStale(stored.canonicalName, stored.timestamp);
+      scheduleSummarization();
+      return stored;
     },
     queryActiveRelations(canonicalName = "", options = {}) {
       const target = normalizeKnowledgeObjectName(canonicalName);
@@ -2317,7 +2381,9 @@ function initializeStaleTargets(data) {
   data.cognitiveMemory.staleDates = unique([...(data.cognitiveMemory.staleDates ?? []), ...staleDates]);
 }
 
-function normalizeMemoryEvent(event = {}, { repository, config, now, index }) {
+// Exported so the layered repository can normalize once and write the same
+// record to Postgres and the projection without re-deriving ids.
+export function normalizeMemoryEvent(event = {}, { repository, config, now, index }) {
   const timestamp = event.timestamp ?? now();
   const canonicalName = normalizeKnowledgeObjectName(event.canonicalName ?? event.concept ?? "");
   const needsKnowledgeContext = event.knowledgeType ||
@@ -2366,7 +2432,7 @@ function normalizeMemoryEvent(event = {}, { repository, config, now, index }) {
   };
 }
 
-function normalizeExplanation(version = {}, { config, now, index }) {
+export function normalizeExplanation(version = {}, { config, now, index }) {
   const timestamp = version.timestamp ?? now();
   const safe = sanitizeExplanationVersion({
     ...version,
@@ -2380,7 +2446,7 @@ function normalizeExplanation(version = {}, { config, now, index }) {
   };
 }
 
-function normalizeMemoryCandidate(candidate = {}, { config, now, index }) {
+export function normalizeMemoryCandidate(candidate = {}, { config, now, index }) {
   const timestamp = candidate.timestamp ?? now();
   const canonicalName = normalizeKnowledgeObjectName(candidate.canonicalName ?? candidate.target ?? candidate.concept ?? "");
   return {
@@ -2400,7 +2466,7 @@ function normalizeMemoryCandidate(candidate = {}, { config, now, index }) {
   };
 }
 
-function createCandidateFromEvent(event = {}) {
+export function createCandidateFromEvent(event = {}) {
   const signal = feedbackSignalForEvent(event);
   if (!signal) return null;
   return {
