@@ -423,11 +423,19 @@ export function createBackgroundService({
   now = () => Date.now(),
   cache = new Map(),
   memoryEventBatchDelayMs = 75,
-  memoryEventBatchMaxSize = 20
+  memoryEventBatchMaxSize = 20,
+  memoryEventRetryDelayMs = 5000,
+  configHydration = null
 } = {}) {
   const requestTimes = [];
   const memoryEventBatch = [];
   let memoryEventBatchTimer = null;
+  // One fire-and-forget retry pass for failed batch flushes. Entries carry
+  // only {event, repository, attempts}: the original promises were already
+  // settled with UNAVAILABLE and must never be touched again.
+  const memoryEventRetryQueue = [];
+  const memoryEventRetryQueueLimit = 200;
+  let memoryEventRetryTimer = null;
   let runtimeConfig = config;
   let registry = providerRegistry ?? createProviderRegistry({
     config: runtimeConfig,
@@ -451,6 +459,12 @@ export function createBackgroundService({
   });
 
   async function handleMessage(message = {}) {
+    // Hydration gate: a restarted MV3 worker must not answer with default
+    // config while the persisted browser config is still loading.
+    if (configHydration) {
+      await configHydration;
+      configHydration = null;
+    }
     if (message.type === BackgroundMessageType.EXPLAIN_KNOWLEDGE) {
       return explainKnowledge(message.payload ?? {});
     }
@@ -862,6 +876,30 @@ export function createBackgroundService({
       memoryRepository: result.memoryRepository
     });
     for (const entry of batch) entry.resolve(result);
+    if (result.status === AgentResultStatus.UNAVAILABLE) {
+      for (const entry of batch) {
+        if ((entry.attempts ?? 0) >= 1) continue;
+        if (memoryEventRetryQueue.length >= memoryEventRetryQueueLimit) break;
+        memoryEventRetryQueue.push({
+          event: entry.event,
+          repository: entry.repository,
+          attempts: (entry.attempts ?? 0) + 1
+        });
+      }
+      scheduleMemoryEventRetry();
+    }
+  }
+
+  function scheduleMemoryEventRetry() {
+    if (memoryEventRetryTimer || memoryEventRetryQueue.length === 0) return;
+    memoryEventRetryTimer = setTimeout(() => {
+      memoryEventRetryTimer = null;
+      const retries = memoryEventRetryQueue.splice(0, memoryEventRetryQueue.length);
+      for (const entry of retries) {
+        memoryEventBatch.push({ ...entry, resolve: () => {} });
+      }
+      void flushMemoryEventBatch();
+    }, Math.max(0, Number(memoryEventRetryDelayMs ?? 0)));
   }
 
   async function queryMemory(query = {}) {
@@ -956,6 +994,7 @@ export function createBackgroundService({
     updateBrowserConfig,
     writeMemoryEvent,
     queryMemory,
+    flushMemoryEvents: flushMemoryEventBatch,
     getDiagnostics: diagnostics.snapshot
   };
 }
