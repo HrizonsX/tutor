@@ -4,12 +4,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { DEFAULT_CONFIG, mergeConfig } from "../src/config.js";
-import { ConceptRelationType, RelationBasis, rankMemoryBridges } from "../src/cognitive-memory.js";
-import { createLocalMemoryStore, createPersistentLocalMemoryStore } from "../src/local-memory-store.js";
-import { createRuntimeExplainPipeline } from "../src/runtime-explain-pipeline.js";
-import { buildRelationProposalBody, validateStructuredRelationProposal } from "../src/provider-adapters.js";
-import { AgentResultStatus, MemoryEventType, StructuredOutputMode } from "../src/contracts.js";
+import { DEFAULT_CONFIG, mergeConfig } from "../src/shared/config.js";
+import { ConceptRelationType, RelationBasis, rankMemoryBridges } from "../src/gateway/cognitive-memory.js";
+import { createLocalMemoryStore, createPersistentLocalMemoryStore } from "../src/gateway/local-memory-store.js";
+import { createRuntimeExplainPipeline } from "../src/gateway/runtime-explain-pipeline.js";
+import { buildRelationProposalBody, validateStructuredRelationProposal } from "../src/gateway/provider-adapters.js";
+import { AgentResultStatus, MemoryEventType, StructuredOutputMode } from "../src/shared/contracts.js";
 
 const may18 = Date.parse("2026-05-18T10:00:00.000Z");
 const may19 = Date.parse("2026-05-19T10:00:00.000Z");

@@ -3,29 +3,29 @@ import {
   createLocalGatewayHandler,
   createProviderRouteChangeAuditLogger,
   startLocalGatewayServer
-} from "../src/local-gateway.js";
+} from "../src/gateway/local-gateway.js";
 import {
   createLocalMemoryStore,
   createMemoryRepositoryFromRuntimeConfig,
   createMemoryRuntime,
   resolveDefaultLocalMemoryStorePath
-} from "../src/memory-runtime.js";
-import { createGatewayProviderRuntime } from "../src/provider-runtime.js";
-import { createLocalAgentRuntime } from "../src/local-agent-runtime.js";
-import { createGatewayRuntimeConfig } from "../src/runtime-config.js";
+} from "../src/gateway/memory-runtime.js";
+import { createGatewayProviderRuntime } from "../src/gateway/provider-runtime.js";
+import { createLocalAgentRuntime } from "../src/gateway/local-agent-runtime.js";
+import { createGatewayRuntimeConfig } from "../src/gateway/runtime-config.js";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createGatewayRuntimeConfigState,
   createJsonFileRuntimeConfigStorage
-} from "../src/runtime-config.js";
+} from "../src/gateway/runtime-config.js";
 import {
   AgentCapability,
   AgentProtocolVersion,
   AgentResultStatus,
   ProviderKind
-} from "../src/contracts.js";
+} from "../src/shared/contracts.js";
 
 const args = new Set(process.argv.slice(2));
 const host = process.env.BCO_GATEWAY_HOST ?? "127.0.0.1";

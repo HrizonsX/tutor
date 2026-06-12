@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { composeShortExplanation, createComposerInput, regenerateExplanation } from "../src/composer.js";
-import { AgentResultStatus, ExplanationStyle, FactSensitivity } from "../src/contracts.js";
+import { composeShortExplanation, createComposerInput, regenerateExplanation } from "../src/extension/composer.js";
+import { AgentResultStatus, ExplanationStyle, FactSensitivity } from "../src/shared/contracts.js";
 
 const packet = {
   target: {

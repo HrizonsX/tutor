@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { FactSensitivity, KnowledgeType, MemoryEventType } from "./contracts.js";
+import { FactSensitivity, KnowledgeType, MemoryEventType } from "../shared/contracts.js";
 
 const FACT_SENSITIVE_TYPES = new Set([
   KnowledgeType.PERSON,

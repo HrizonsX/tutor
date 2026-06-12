@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { FactSensitivity, MemoryEventType } from "./contracts.js";
+import { FactSensitivity, MemoryEventType } from "../shared/contracts.js";
 
 const FEEDBACK_TYPES = new Set([
   MemoryEventType.MARKED_KNOWN,

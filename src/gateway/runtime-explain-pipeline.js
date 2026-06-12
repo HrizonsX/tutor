@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { DEFAULT_CONFIG } from "./config.js";
+import { DEFAULT_CONFIG } from "../shared/config.js";
 import {
   AgentCapability,
   AgentRequestGoal,
@@ -11,10 +11,10 @@ import {
   ProviderKind,
   StreamEventType,
   StreamLane
-} from "./contracts.js";
-import { normalizeKnowledgeObjectName } from "./concepts.js";
+} from "../shared/contracts.js";
+import { normalizeKnowledgeObjectName } from "../shared/concepts.js";
 import { isRelationUsableForOverlay } from "./cognitive-memory.js";
-import { clampText, hashString, safeUrlMetadata, sanitizeEventContext } from "./privacy.js";
+import { clampText, hashString, safeUrlMetadata, sanitizeEventContext } from "../shared/privacy.js";
 
 const MEMORY_FIELD_NAMES = new Set([
   "memoryPacket",

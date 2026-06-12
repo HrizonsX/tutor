@@ -1,8 +1,8 @@
 // @ts-nocheck
-import { DEFAULT_CONFIG } from "./config.js";
-import { DerivedSignal, MemoryEventType } from "./contracts.js";
-import { normalizeKnowledgeObjectName } from "./concepts.js";
-import { clampSourceDate, clampSourceIds, clampText, hashString, sanitizeRelationEvidence, stripUntrustedProposalText } from "./privacy.js";
+import { DEFAULT_CONFIG } from "../shared/config.js";
+import { DerivedSignal, MemoryEventType } from "../shared/contracts.js";
+import { normalizeKnowledgeObjectName } from "../shared/concepts.js";
+import { clampSourceDate, clampSourceIds, clampText, hashString, sanitizeRelationEvidence, stripUntrustedProposalText } from "../shared/privacy.js";
 
 export const COGNITIVE_MEMORY_VERSION = "cognitive-memory.v1";
 export const DAILY_SUMMARY_VERSION = "daily-memory-summary.v1";

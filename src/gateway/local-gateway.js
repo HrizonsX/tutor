@@ -9,7 +9,7 @@ import {
   AgentCapability,
   AgentResultStatus,
   StreamEventType
-} from "./contracts.js";
+} from "../shared/contracts.js";
 import { createLocalAgentRuntime } from "./local-agent-runtime.js";
 import { timingSafeEqual } from "node:crypto";
 import { inspect } from "node:util";

@@ -12,7 +12,7 @@ import {
   StreamEventType,
   StreamLane,
   StructuredOutputMode
-} from "../src/contracts.js";
+} from "../src/shared/contracts.js";
 import {
   forgedMemoryStreamRequest,
   noBridgeMemoryPacket
@@ -24,13 +24,13 @@ import {
   createLocalMemoryStore,
   createPersistentLocalMemoryStore,
   startLocalGatewayServer
-} from "../src/local-gateway.js";
+} from "../src/gateway/local-gateway.js";
 import {
   createDisabledVectorRecallAdapter,
   createInMemoryPostgresMemoryClient,
   createInMemorySessionView,
   createLayeredMemoryRepository
-} from "../src/layered-memory-repository.js";
+} from "../src/gateway/layered-memory-repository.js";
 
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 

@@ -1,7 +1,7 @@
 // @ts-nocheck
-import { DEFAULT_CONFIG, mergeConfig } from "./config.js";
-import { AgentResultStatus, MemoryEventType, MemoryRepositoryMode } from "./contracts.js";
-import { normalizeKnowledgeObjectName } from "./concepts.js";
+import { DEFAULT_CONFIG, mergeConfig } from "../shared/config.js";
+import { AgentResultStatus, MemoryEventType, MemoryRepositoryMode } from "../shared/contracts.js";
+import { normalizeKnowledgeObjectName } from "../shared/concepts.js";
 import {
   createCandidateFromEvent,
   createLocalMemoryStore,

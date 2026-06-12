@@ -5,8 +5,8 @@ import {
   BackgroundMessageType,
   ProviderKind,
   ProviderRole
-} from "./contracts.js";
-import { BROWSER_CONFIG_STORAGE_KEY, DEFAULT_CONFIG, mergeConfig } from "./config.js";
+} from "../shared/contracts.js";
+import { BROWSER_CONFIG_STORAGE_KEY, DEFAULT_CONFIG, mergeConfig } from "../shared/config.js";
 
 export { BROWSER_CONFIG_STORAGE_KEY };
 

@@ -8,9 +8,9 @@ import {
   createLocalMemoryStore,
   createPersistentLocalMemoryStore,
   LOCAL_MEMORY_SUMMARIZER_VERSION
-} from "../src/local-memory-store.js";
-import { AgentResultStatus, DerivedSignal, MemoryEventType } from "../src/contracts.js";
-import { ConceptRelationType, RelationBasis } from "../src/cognitive-memory.js";
+} from "../src/gateway/local-memory-store.js";
+import { AgentResultStatus, DerivedSignal, MemoryEventType } from "../src/shared/contracts.js";
+import { ConceptRelationType, RelationBasis } from "../src/gateway/cognitive-memory.js";
 
 test("persistent Local Memory Store survives restart and keeps minimal raw evidence", async () => {
   const directory = await mkdtemp(join(tmpdir(), "bco-memory-"));

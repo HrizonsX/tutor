@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createGatewayRuntimeConfig } from "../src/runtime-config.js";
-import { createMemoryRepositoryFromRuntimeConfig } from "../src/memory-repository-factory.js";
+import { createGatewayRuntimeConfig } from "../src/gateway/runtime-config.js";
+import { createMemoryRepositoryFromRuntimeConfig } from "../src/gateway/memory-repository-factory.js";
 
 const hasLayeredIntegrationEnv = Boolean(
   process.env.BCO_TEST_POSTGRES_URL &&

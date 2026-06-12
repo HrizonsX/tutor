@@ -4,16 +4,16 @@ import { resolve } from "node:path";
 import {
   createLocalGatewayHandler,
   createPersistentLocalMemoryStore
-} from "../src/local-gateway.js";
+} from "../src/gateway/local-gateway.js";
 import {
   AgentCapability,
   AgentResultStatus,
   MemoryEventType
-} from "../src/contracts.js";
+} from "../src/shared/contracts.js";
 import {
   ConceptRelationType,
   RelationBasis
-} from "../src/cognitive-memory.js";
+} from "../src/gateway/cognitive-memory.js";
 
 const RELATED_MEMORY = process.env.BCO_PRE_RECALL_SMOKE_MEMORY ?? "\u6787\u6777";
 const TARGET_CONCEPT = process.env.BCO_PRE_RECALL_SMOKE_TARGET ?? "\u5e38\u592a";

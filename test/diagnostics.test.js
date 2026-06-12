@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createBackgroundService } from "../src/agent-service.js";
-import { DEFAULT_CONFIG, mergeConfig } from "../src/config.js";
-import { createDiagnosticsState } from "../src/diagnostics.js";
-import { createLocalGatewayHandler } from "../src/local-gateway.js";
+import { createBackgroundService } from "../src/extension/agent-service.js";
+import { DEFAULT_CONFIG, mergeConfig } from "../src/shared/config.js";
+import { createDiagnosticsState } from "../src/extension/diagnostics.js";
+import { createLocalGatewayHandler } from "../src/gateway/local-gateway.js";
 import {
   AgentCapability,
   AgentResultStatus,
@@ -13,7 +13,7 @@ import {
   ProviderRole,
   StreamEventType,
   StreamLane
-} from "../src/contracts.js";
+} from "../src/shared/contracts.js";
 
 test("diagnostics snapshot redacts secrets and records latest state", () => {
   const diagnostics = createDiagnosticsState({ now: () => 1000 });

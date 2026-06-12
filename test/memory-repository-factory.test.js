@@ -3,17 +3,17 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { AgentResultStatus, MemoryEventType } from "../src/contracts.js";
-import { createGatewayRuntimeConfig } from "../src/runtime-config.js";
+import { AgentResultStatus, MemoryEventType } from "../src/shared/contracts.js";
+import { createGatewayRuntimeConfig } from "../src/gateway/runtime-config.js";
 import {
   createMemoryRepositoryFromRuntimeConfig,
   createPostgresMemoryClient,
   createRedisSessionView
-} from "../src/memory-repository-factory.js";
+} from "../src/gateway/memory-repository-factory.js";
 import {
   createDisabledVectorRecallAdapter,
   createInMemorySessionView
-} from "../src/layered-memory-repository.js";
+} from "../src/gateway/layered-memory-repository.js";
 
 test("memory repository factory selects SQLite fallback by default", async () => {
   const directory = await mkdtemp(join(tmpdir(), "bco-factory-sqlite-"));

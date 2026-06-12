@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MemoryEventType } from "../src/contracts.js";
-import { buildRetrievalPacket, curateKnowledgeMemory } from "../src/knowledge-agent.js";
+import { MemoryEventType } from "../src/shared/contracts.js";
+import { buildRetrievalPacket, curateKnowledgeMemory } from "../src/gateway/knowledge-agent.js";
 
 test("curated knowledge memory aggregates aliases, encounters, and evidence", () => {
   const events = [

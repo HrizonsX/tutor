@@ -2,15 +2,15 @@
 import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
-import { DEFAULT_CONFIG, mergeConfig } from "./config.js";
+import { DEFAULT_CONFIG, mergeConfig } from "../shared/config.js";
 import {
   AgentResultStatus,
   DerivedSignal,
   ExplanationStyle,
   MemoryEventType,
   MemoryRepositoryMode
-} from "./contracts.js";
-import { normalizeKnowledgeObjectName } from "./concepts.js";
+} from "../shared/contracts.js";
+import { normalizeKnowledgeObjectName } from "../shared/concepts.js";
 import {
   buildConceptProjection,
   buildDailyMemorySummary,
@@ -35,7 +35,7 @@ import {
   sanitizeExplanationVersion,
   sanitizeKnowledgeContext,
   sanitizeRelationEvidence
-} from "./privacy.js";
+} from "../shared/privacy.js";
 
 export const LocalMemoryStoreMode = Object.freeze({
   MEMORY: "memory",

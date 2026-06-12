@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_CONFIG, mergeConfig } from "../src/config.js";
+import { DEFAULT_CONFIG, mergeConfig } from "../src/shared/config.js";
 import {
   AgentCapability,
   AgentProtocolVersion,
@@ -10,20 +10,20 @@ import {
   ProviderKind,
   ProviderRole,
   StructuredOutputMode
-} from "../src/contracts.js";
+} from "../src/shared/contracts.js";
 import {
   createLocalGatewayClient,
   createProviderRegistry,
   normalizeProviderMode,
   validateProviderRoleConfig
-} from "../src/provider-registry.js";
+} from "../src/extension/provider-registry.js";
 import {
   createGatewayProviderRuntime,
   createGatewayRuntimeConfig,
   createLocalGatewayHandler,
   createLocalMemoryStore
-} from "../src/local-gateway.js";
-import { createGatewayRuntimeConfigState } from "../src/runtime-config.js";
+} from "../src/gateway/local-gateway.js";
+import { createGatewayRuntimeConfigState } from "../src/gateway/runtime-config.js";
 
 test("provider registry normalizes runtime provider modes but browser resolves local gateway only", () => {
   assert.equal(normalizeProviderMode("none"), ProviderKind.OFF);

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { BROWSER_CONFIG_STORAGE_KEY, DEFAULT_CONFIG, mergeConfig } from "./config.js";
+import { BROWSER_CONFIG_STORAGE_KEY, DEFAULT_CONFIG, mergeConfig } from "../shared/config.js";
 
 // MV3 service workers are evicted and restarted at any time; a restarted
 // worker must rehydrate the persisted browser config before answering

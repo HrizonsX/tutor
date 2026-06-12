@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { ExplanationStyle, MemoryEventType } from "./contracts.js";
-import { AgentResultStatus, StreamEventType, StreamLane } from "./contracts.js";
+import { ExplanationStyle, MemoryEventType } from "../shared/contracts.js";
+import { AgentResultStatus, StreamEventType, StreamLane } from "../shared/contracts.js";
 
 export class CognitiveOverlay {
   constructor({

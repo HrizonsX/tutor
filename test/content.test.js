@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { startBrowserCognitiveOverlay } from "../src/content.js";
-import { BROWSER_CONFIG_STORAGE_KEY, DEFAULT_CONFIG, mergeConfig } from "../src/config.js";
-import { AgentResultStatus, MemoryEventType, StreamEventType, StreamLane, SuppressionReason } from "../src/contracts.js";
+import { startBrowserCognitiveOverlay } from "../src/extension/content.js";
+import { BROWSER_CONFIG_STORAGE_KEY, DEFAULT_CONFIG, mergeConfig } from "../src/shared/config.js";
+import { AgentResultStatus, MemoryEventType, StreamEventType, StreamLane, SuppressionReason } from "../src/shared/contracts.js";
 
 test("content startup keeps memory out of browser storage and forwards feedback events", () => {
   const doc = fakeDocument();

@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { DEFAULT_CONFIG } from "./config.js";
-import { DerivedSignal, FactSensitivity, SuppressionReason } from "./contracts.js";
+import { DEFAULT_CONFIG } from "../shared/config.js";
+import { DerivedSignal, FactSensitivity, SuppressionReason } from "../shared/contracts.js";
 
 export function scoreIntervention({
   fragment = null,

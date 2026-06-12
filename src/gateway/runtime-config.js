@@ -1,13 +1,13 @@
 // @ts-nocheck
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { DEFAULT_CONFIG } from "./config.js";
+import { DEFAULT_CONFIG } from "../shared/config.js";
 import {
   AgentResultStatus,
   ProviderAdapter,
   ProviderKind,
   StructuredOutputMode
-} from "./contracts.js";
+} from "../shared/contracts.js";
 
 export const DEFAULT_GATEWAY_PROVIDER_CONFIG = Object.freeze({
   explain: {

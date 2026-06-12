@@ -5,7 +5,7 @@ import {
   createBackgroundAgentClient,
   createBackgroundService,
   validateAgentExplanationResult
-} from "../src/agent-service.js";
+} from "../src/extension/agent-service.js";
 import {
   AgentCapability,
   AgentResultStatus,
@@ -15,11 +15,11 @@ import {
   ProviderRole,
   StreamEventType,
   StreamLane
-} from "../src/contracts.js";
-import { DEFAULT_CONFIG, mergeConfig } from "../src/config.js";
-import { createLocalGatewayHandler } from "../src/local-gateway.js";
-import { createLocalGatewayClient } from "../src/provider-registry.js";
-import { createGatewayRuntimeConfigState } from "../src/runtime-config.js";
+} from "../src/shared/contracts.js";
+import { DEFAULT_CONFIG, mergeConfig } from "../src/shared/config.js";
+import { createLocalGatewayHandler } from "../src/gateway/local-gateway.js";
+import { createLocalGatewayClient } from "../src/extension/provider-registry.js";
+import { createGatewayRuntimeConfigState } from "../src/gateway/runtime-config.js";
 
 const input = {
   target: {

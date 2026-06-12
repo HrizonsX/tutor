@@ -10,8 +10,8 @@ import {
   resolveConfigSaveStatus,
   runConfigSaveOnce,
   saveConfigUpdate
-} from "../src/options.js";
-import { AgentCapability, AgentResultStatus, ProviderKind, ProviderRole } from "../src/contracts.js";
+} from "../src/extension/options.js";
+import { AgentCapability, AgentResultStatus, ProviderKind, ProviderRole } from "../src/shared/contracts.js";
 
 test("options view model renders an explicit empty state before diagnostics arrive", () => {
   const model = buildOptionsViewModel();

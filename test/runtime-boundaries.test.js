@@ -7,12 +7,12 @@ import {
   AgentCapability,
   AgentResultStatus,
   ProviderRole
-} from "../src/contracts.js";
-import { createGatewayProviderRuntime } from "../src/provider-runtime.js";
-import { createMemoryRuntime } from "../src/memory-runtime.js";
-import { createLocalAgentRuntime } from "../src/local-agent-runtime.js";
-import { createLocalMemoryStore } from "../src/local-memory-store.js";
-import { createGatewayRuntimeConfigState } from "../src/runtime-config.js";
+} from "../src/shared/contracts.js";
+import { createGatewayProviderRuntime } from "../src/gateway/provider-runtime.js";
+import { createMemoryRuntime } from "../src/gateway/memory-runtime.js";
+import { createLocalAgentRuntime } from "../src/gateway/local-agent-runtime.js";
+import { createLocalMemoryStore } from "../src/gateway/local-memory-store.js";
+import { createGatewayRuntimeConfigState } from "../src/gateway/runtime-config.js";
 
 function enabledExplainConfig(overrides = {}) {
   return {

@@ -10,9 +10,9 @@ import {
   ProviderErrorReason,
   StreamLane,
   StructuredOutputMode
-} from "./contracts.js";
+} from "../shared/contracts.js";
 import { ConceptRelationType, RelationBasis, RELATION_PROPOSER_VERSION } from "./cognitive-memory.js";
-import { clampText, hashString } from "./privacy.js";
+import { clampText, hashString } from "../shared/privacy.js";
 import { inspect } from "node:util";
 
 export const EXPLAIN_JSON_SCHEMA = Object.freeze({

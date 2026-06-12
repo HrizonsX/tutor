@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_CONFIG, mergeConfig } from "../src/config.js";
+import { DEFAULT_CONFIG, mergeConfig } from "../src/shared/config.js";
 import {
   AgentCapability,
   AgentProtocolVersion,
@@ -16,8 +16,8 @@ import {
   ProviderKind,
   ProviderRole,
   StructuredOutputMode
-} from "../src/contracts.js";
-import { extractConceptCandidates } from "../src/concepts.js";
+} from "../src/shared/contracts.js";
+import { extractConceptCandidates } from "../src/shared/concepts.js";
 import {
   buildAnalysisPayload,
   sanitizeEventContext,
@@ -26,7 +26,7 @@ import {
   sanitizeProfileEvidence,
   sanitizeRelationEvidence,
   stripUntrustedProposalText
-} from "../src/privacy.js";
+} from "../src/shared/privacy.js";
 
 test("new contracts expose knowledge, feedback, and fact sensitivity types", () => {
   assert.equal(KnowledgeType.HISTORICAL_ALLUSION, "historical_allusion");

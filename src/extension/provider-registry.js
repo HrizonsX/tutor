@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { withTimeout } from "./async-control.js";
-import { DEFAULT_CONFIG } from "./config.js";
+import { withTimeout } from "../shared/async-control.js";
+import { DEFAULT_CONFIG } from "../shared/config.js";
 import {
   AgentCapability,
   AgentProtocolVersion,
@@ -8,7 +8,7 @@ import {
   ProviderAdapter,
   ProviderKind,
   ProviderRole
-} from "./contracts.js";
+} from "../shared/contracts.js";
 
 export const DEFAULT_CAPABILITIES = Object.freeze({
   [AgentCapability.HEALTH]: false,

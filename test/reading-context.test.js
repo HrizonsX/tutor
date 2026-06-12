@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BehaviorTracker } from "../src/behavior.js";
-import { FragmentType } from "../src/contracts.js";
-import { classifyElement, discoverReadableFragments, ReadingContextTracker, selectCurrentFragment } from "../src/reading-context.js";
+import { BehaviorTracker } from "../src/extension/behavior.js";
+import { FragmentType } from "../src/shared/contracts.js";
+import { classifyElement, discoverReadableFragments, ReadingContextTracker, selectCurrentFragment } from "../src/extension/reading-context.js";
 
 test("classifies readable element types", () => {
   assert.equal(classifyElement({ tagName: "P" }), FragmentType.PARAGRAPH);

@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { withTimeout } from "./async-control.js";
-import { DEFAULT_CONFIG, mergeConfig } from "./config.js";
+import { withTimeout } from "../shared/async-control.js";
+import { DEFAULT_CONFIG, mergeConfig } from "../shared/config.js";
 import {
   AgentCapability,
   AgentProtocolVersion,
@@ -13,13 +13,13 @@ import {
   ProviderRole,
   StreamEventType,
   StreamLane
-} from "./contracts.js";
+} from "../shared/contracts.js";
 import { createDiagnosticsState } from "./diagnostics.js";
 import {
   createProviderRegistry,
   hasCapability
 } from "./provider-registry.js";
-import { clampText, hashString } from "./privacy.js";
+import { clampText, hashString } from "../shared/privacy.js";
 
 export function createAgentRequest({
   input = {},

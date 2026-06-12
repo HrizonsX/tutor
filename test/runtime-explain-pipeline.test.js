@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createRuntimeExplainPipeline } from "../src/runtime-explain-pipeline.js";
-import { createLocalMemoryStore } from "../src/local-memory-store.js";
-import { AgentCapability, AgentResultStatus, MemoryEventType, StreamEventType, StreamLane } from "../src/contracts.js";
-import { ConceptRelationType, RelationBasis } from "../src/cognitive-memory.js";
+import { createRuntimeExplainPipeline } from "../src/gateway/runtime-explain-pipeline.js";
+import { createLocalMemoryStore } from "../src/gateway/local-memory-store.js";
+import { AgentCapability, AgentResultStatus, MemoryEventType, StreamEventType, StreamLane } from "../src/shared/contracts.js";
+import { ConceptRelationType, RelationBasis } from "../src/gateway/cognitive-memory.js";
 import {
   directStreamRequest,
   forgedMemoryStreamRequest,

@@ -1,14 +1,14 @@
 // @ts-nocheck
-import { BROWSER_CONFIG_STORAGE_KEY, loadRuntimeConfig, mergeConfig } from "./config.js";
+import { BROWSER_CONFIG_STORAGE_KEY, loadRuntimeConfig, mergeConfig } from "../shared/config.js";
 import { ReadingContextTracker, isIgnoredReadingSurface } from "./reading-context.js";
 import { BehaviorTracker } from "./behavior.js";
-import { extractConceptCandidates, normalizeKnowledgeObjectName, validateSelectedConcept } from "./concepts.js";
+import { extractConceptCandidates, normalizeKnowledgeObjectName, validateSelectedConcept } from "../shared/concepts.js";
 import { composeShortExplanation, createComposerInput, regenerateExplanation } from "./composer.js";
 import { classifyFactSensitivity } from "./fact-sensitivity.js";
 import { scoreIntervention } from "./inference.js";
-import { buildAnalysisPayload, hashString, safeUrlMetadata } from "./privacy.js";
+import { buildAnalysisPayload, hashString, safeUrlMetadata } from "../shared/privacy.js";
 import { CognitiveOverlay } from "./overlay.js";
-import { AgentResultStatus, MemoryEventType } from "./contracts.js";
+import { AgentResultStatus, MemoryEventType } from "../shared/contracts.js";
 import { createBackgroundAgentClient, validateAgentExplanationResult } from "./agent-service.js";
 
 const ENCOUNTER_WRITE_COOLDOWN_MS = 30 * 1000;

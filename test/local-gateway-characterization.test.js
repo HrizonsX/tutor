@@ -9,8 +9,8 @@ import {
   AgentProtocolVersion,
   AgentResultStatus,
   ProviderKind
-} from "../src/contracts.js";
-import { createLocalGatewayHandler, createLocalMemoryStore } from "../src/local-gateway.js";
+} from "../src/shared/contracts.js";
+import { createLocalGatewayHandler, createLocalMemoryStore } from "../src/gateway/local-gateway.js";
 
 const AUTHED_JSON_HEADERS = { "x-bco-pairing-token": "secret", "content-type": "application/json" };
 

@@ -8,7 +8,7 @@ import {
   GENERAL_KNOWLEDGE_DEFINITIONS,
   normalizeConceptName,
   validateSelectedConcept
-} from "../src/concepts.js";
+} from "../src/shared/concepts.js";
 
 test("extracts phrase-level concepts instead of generic words", () => {
   const cases = [

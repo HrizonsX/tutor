@@ -6,11 +6,11 @@ import {
   linkAbortSignals,
   withAbortTimeout,
   withTimeout
-} from "../src/async-control.js";
-import { createGatewayProviderRuntime } from "../src/local-gateway.js";
-import { createBackgroundAgentClient } from "../src/agent-service.js";
-import { createLocalGatewayClient } from "../src/provider-registry.js";
-import { AgentResultStatus, ProviderAdapter, ProviderKind } from "../src/contracts.js";
+} from "../src/shared/async-control.js";
+import { createGatewayProviderRuntime } from "../src/gateway/local-gateway.js";
+import { createBackgroundAgentClient } from "../src/extension/agent-service.js";
+import { createLocalGatewayClient } from "../src/extension/provider-registry.js";
+import { AgentResultStatus, ProviderAdapter, ProviderKind } from "../src/shared/contracts.js";
 
 test("withAbortTimeout aborts the work signal before rejecting on timeout", async () => {
   let observedSignal = null;

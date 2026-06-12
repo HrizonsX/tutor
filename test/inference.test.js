@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractConceptCandidates } from "../src/concepts.js";
-import { ExplanationStyle, SuppressionReason } from "../src/contracts.js";
-import { scoreIntervention } from "../src/inference.js";
+import { extractConceptCandidates } from "../src/shared/concepts.js";
+import { ExplanationStyle, SuppressionReason } from "../src/shared/contracts.js";
+import { scoreIntervention } from "../src/extension/inference.js";
 
 const fragment = {
   id: "p1",

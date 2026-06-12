@@ -2,7 +2,7 @@
 // Provider Runtime boundary: provider dispatch, role/capability state, and
 // per-call timeout handling. The HTTP gateway composes this runtime but never
 // touches provider adapters directly.
-import { DEFAULT_CONFIG } from "./config.js";
+import { DEFAULT_CONFIG } from "../shared/config.js";
 import {
   AgentCapability,
   AgentResultStatus,
@@ -10,9 +10,9 @@ import {
   ProviderKind,
   ProviderRole,
   StructuredOutputMode
-} from "./contracts.js";
+} from "../shared/contracts.js";
 import { createProviderAdapterClient } from "./provider-adapters.js";
-import { isTimeoutError, withAbortTimeout } from "./async-control.js";
+import { isTimeoutError, withAbortTimeout } from "../shared/async-control.js";
 import {
   DEFAULT_GATEWAY_PROVIDER_CONFIG,
   createGatewayRuntimeConfig,

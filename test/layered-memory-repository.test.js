@@ -1,13 +1,13 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
-import { AgentResultStatus, MemoryEventType } from "../src/contracts.js";
+import { AgentResultStatus, MemoryEventType } from "../src/shared/contracts.js";
 import {
   createDisabledVectorRecallAdapter,
   createInMemoryPostgresMemoryClient,
   createInMemorySessionView,
   createLayeredMemoryRepository,
   createTestVectorRecallAdapter
-} from "../src/layered-memory-repository.js";
+} from "../src/gateway/layered-memory-repository.js";
 
 test("layered repository reports unavailable without Postgres configuration", async () => {
   const repository = createLayeredMemoryRepository({

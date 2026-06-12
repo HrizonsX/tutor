@@ -2,7 +2,7 @@
 // Memory Runtime boundary: a thin runtime-owned facade over the local memory
 // store (or layered repository). The HTTP gateway and the explain pipeline go
 // through this facade; neither touches local-memory-store.js directly.
-import { AgentResultStatus } from "./contracts.js";
+import { AgentResultStatus } from "../shared/contracts.js";
 import {
   createLocalMemoryStore,
   createPersistentLocalMemoryStore,

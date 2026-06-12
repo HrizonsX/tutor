@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { FragmentType } from "./contracts.js";
-import { hashString } from "./privacy.js";
+import { FragmentType } from "../shared/contracts.js";
+import { hashString } from "../shared/privacy.js";
 
 const OVERLAY_ROOT_ID = "browser-cognitive-overlay";
 const EDITABLE_TAGS = new Set(["input", "textarea", "select", "option"]);

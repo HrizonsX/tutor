@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   createPostgresMemorySchemaStatements,
   validatePostgresMemorySchemaVersion
-} from "../src/postgres-memory-schema.js";
+} from "../src/gateway/postgres-memory-schema.js";
 
 test("Postgres memory schema includes layered MVP source and projection tables", () => {
   const sql = createPostgresMemorySchemaStatements({ schema: "memory" }).join("\n");

@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractConceptCandidates } from "../src/concepts.js";
-import { FactSensitivity } from "../src/contracts.js";
-import { classifyFactSensitivity } from "../src/fact-sensitivity.js";
+import { extractConceptCandidates } from "../src/shared/concepts.js";
+import { FactSensitivity } from "../src/shared/contracts.js";
+import { classifyFactSensitivity } from "../src/extension/fact-sensitivity.js";
 
 test("fact-sensitive technology organization falls back when source is missing", () => {
   const candidate = extractConceptCandidates({

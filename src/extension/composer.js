@@ -1,8 +1,8 @@
 // @ts-nocheck
-import { DEFAULT_CONFIG } from "./config.js";
-import { AgentCapability, AgentRequestGoal, ExplanationStyle } from "./contracts.js";
+import { DEFAULT_CONFIG } from "../shared/config.js";
+import { AgentCapability, AgentRequestGoal, ExplanationStyle } from "../shared/contracts.js";
 import { createUnavailableAgentResult, validateAgentExplanationResult } from "./agent-service.js";
-import { clampText } from "./privacy.js";
+import { clampText } from "../shared/privacy.js";
 
 export function createComposerInput({
   retrievalPacket,

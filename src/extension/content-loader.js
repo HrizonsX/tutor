@@ -2,7 +2,7 @@
 (async () => {
   const root = document.documentElement;
   root.dataset.bcoLoaderState = "loading";
-  const contentUrl = chrome.runtime.getURL("src/content.js");
+  const contentUrl = chrome.runtime.getURL("src/extension/content.js");
 
   try {
     await import(contentUrl);

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createBackgroundService } from "../src/agent-service.js";
-import { DEFAULT_CONFIG, mergeConfig } from "../src/config.js";
+import { createBackgroundService } from "../src/extension/agent-service.js";
+import { DEFAULT_CONFIG, mergeConfig } from "../src/shared/config.js";
 import {
   AgentCapability,
   AgentResultStatus,
@@ -12,12 +12,12 @@ import {
   ProviderRole,
   StreamLane,
   StructuredOutputMode
-} from "../src/contracts.js";
+} from "../src/shared/contracts.js";
 import {
   createGatewayProviderRuntime,
   createGatewayRuntimeConfig,
   createLocalGatewayHandler
-} from "../src/local-gateway.js";
+} from "../src/gateway/local-gateway.js";
 import {
   buildChatCompletionBody,
   buildStreamingChatCompletionBody,
@@ -25,7 +25,7 @@ import {
   buildRelationProposalBody,
   createOpenAICompatibleAdapter,
   joinProviderUrl
-} from "../src/provider-adapters.js";
+} from "../src/gateway/provider-adapters.js";
 import {
   directStreamRequest,
   multiBridgeMemoryPacket,

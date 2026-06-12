@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { AgentResultStatus, ProviderKind, ProviderRole, StreamEventType, StreamLane } from "./contracts.js";
+import { AgentResultStatus, ProviderKind, ProviderRole, StreamEventType, StreamLane } from "../shared/contracts.js";
 
 const EMPTY_HEALTH = Object.freeze({
   status: AgentResultStatus.UNAVAILABLE,

@@ -11,7 +11,7 @@ import {
   MemoryRepositoryMode,
   ProviderKind,
   StreamLane
-} from "./contracts.js";
+} from "../shared/contracts.js";
 import { createMemoryRuntime } from "./memory-runtime.js";
 import { createRuntimeExplainPipeline } from "./runtime-explain-pipeline.js";
 

@@ -266,12 +266,26 @@ and recall counts for the latest streaming session.
 
 ## Architecture
 
-- `src/reading-context.js`: visible fragment discovery and current context scoring
-- `src/behavior.js`: dwell, revisit, selection, pause, and inactivity signals
-- `src/concepts.js`: concept extraction, alias normalization, and explanation text
-- `src/inference.js`: multi-signal intervention priority with cooldown suppression
-- `src/overlay.js`: low-interruption overlay UI
-- `src/content.js`: content-script coordinator
+The source tree is physically split by trust domain:
+
+- `src/shared/`: the only protocol surface both runtimes may import —
+  `contracts.js`, `config.js`, `privacy.js`, `concepts.js`, `async-control.js`
+- `src/extension/`: the MV3 extension — `content.js` (content-script
+  coordinator), `reading-context.js` (visible fragment discovery),
+  `behavior.js` (dwell/revisit/selection signals), `inference.js`
+  (intervention scoring), `overlay.js` (low-interruption UI),
+  `agent-service.js`/`background.js` (service worker), `options.*`
+- `src/gateway/`: the local Node gateway — `local-gateway.js` (thin HTTP
+  layer), `local-agent-runtime.js` (request orchestration),
+  `provider-runtime.js` (provider dispatch), `memory-runtime.js` (store
+  facade), `local-memory-store.js`, `provider-adapters.js`, and the layered
+  repository modules
+
+Boundary rules are enforced by static tests (`test/module-boundaries.test.js`):
+extension and gateway may import only `shared`; `shared` imports only itself;
+`web_accessible_resources` exposes only `src/extension/*.js` and
+`src/shared/*.js`, so gateway internals (prompt templates, schema) are never
+readable by web pages.
 
 The browser extension forwards immediate page context and interaction events to
 the local gateway. Durable memory, profile derivation, summarization, and

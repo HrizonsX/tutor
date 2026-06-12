@@ -5,12 +5,12 @@ import {
   ProviderAdapter,
   ProviderKind,
   StructuredOutputMode
-} from "../src/contracts.js";
+} from "../src/shared/contracts.js";
 import {
   createGatewayRuntimeConfig,
   createGatewayRuntimeConfigState,
   redactRuntimeConfig
-} from "../src/runtime-config.js";
+} from "../src/gateway/runtime-config.js";
 
 test("gateway runtime config includes relation proposer role defaults", () => {
   const config = createGatewayRuntimeConfig({ env: {} });

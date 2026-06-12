@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { initializeBackground } from "../src/background-init.js";
-import { createBackgroundService } from "../src/agent-service.js";
-import { BROWSER_CONFIG_STORAGE_KEY } from "../src/config.js";
-import { AgentResultStatus, BackgroundMessageType } from "../src/contracts.js";
+import { initializeBackground } from "../src/extension/background-init.js";
+import { createBackgroundService } from "../src/extension/agent-service.js";
+import { BROWSER_CONFIG_STORAGE_KEY } from "../src/shared/config.js";
+import { AgentResultStatus, BackgroundMessageType } from "../src/shared/contracts.js";
 
 function fakeChromeApi({
   storedBrowserConfig = null,

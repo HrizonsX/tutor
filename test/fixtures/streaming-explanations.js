@@ -1,4 +1,4 @@
-import { AgentRequestGoal, StreamLane } from "../../src/contracts.js";
+import { AgentRequestGoal, StreamLane } from "../../src/shared/contracts.js";
 
 export const streamingTarget = Object.freeze({
   canonicalName: "Loquat",

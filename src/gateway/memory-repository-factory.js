@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { createLocalMemoryStore, createPersistentLocalMemoryStore } from "./local-memory-store.js";
-import { normalizeKnowledgeObjectName } from "./concepts.js";
-import { AgentResultStatus, MemoryEventType } from "./contracts.js";
+import { normalizeKnowledgeObjectName } from "../shared/concepts.js";
+import { AgentResultStatus, MemoryEventType } from "../shared/contracts.js";
 import {
   createDisabledVectorRecallAdapter,
   createInMemorySessionView,

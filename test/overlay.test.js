@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { AgentResultStatus, MemoryEventType, StreamEventType, StreamLane } from "../src/contracts.js";
-import { CognitiveOverlay } from "../src/overlay.js";
+import { AgentResultStatus, MemoryEventType, StreamEventType, StreamLane } from "../src/shared/contracts.js";
+import { CognitiveOverlay } from "../src/extension/overlay.js";
 
 test("overlay renders focused actions and replaces regenerated explanation", async () => {
   const doc = fakeDocument();

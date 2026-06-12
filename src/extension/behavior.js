@@ -1,7 +1,7 @@
 // @ts-nocheck
-import { DEFAULT_CONFIG } from "./config.js";
-import { FragmentType } from "./contracts.js";
-import { looksLikeCodeSelection, validateSelectedConcept } from "./concepts.js";
+import { DEFAULT_CONFIG } from "../shared/config.js";
+import { FragmentType } from "../shared/contracts.js";
+import { looksLikeCodeSelection, validateSelectedConcept } from "../shared/concepts.js";
 
 export class BehaviorTracker {
   constructor({ config = DEFAULT_CONFIG.behavior, now = () => Date.now() } = {}) {
