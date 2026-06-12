@@ -1,0 +1,11 @@
+# Normalize all text files to LF in the repository and the working tree.
+# The index is already 100% LF; this stops checkout-time CRLF conversion on
+# Windows (and the warning spam that comes with it) for every contributor.
+* text=auto eol=lf
+
+# Lockfiles and generated artifacts keep LF too (covered by the rule above);
+# binaries are listed explicitly so autodetection never mangles them.
+*.png binary
+*.jpg binary
+*.gif binary
+*.woff2 binary

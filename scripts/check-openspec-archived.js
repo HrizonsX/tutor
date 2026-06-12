@@ -10,8 +10,8 @@
 //   node scripts/check-openspec-archived.js            report stale changes, exit 0
 //   node scripts/check-openspec-archived.js --strict   exit 1 when stale changes exist
 //
-// CI runs the non-strict mode until the currently known stale changes are
-// archived; switch the CI step to --strict afterwards.
+// CI runs --strict: a fully completed change must be archived (and its delta
+// specs merged into openspec/specs/) before the branch can go green.
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

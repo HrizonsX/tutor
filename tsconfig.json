@@ -4,6 +4,7 @@
     "checkJs": true,
     "noEmit": true,
     "strict": false,
+    "noUnusedLocals": true,
     "target": "es2022",
     "module": "nodenext",
     "moduleResolution": "nodenext",
