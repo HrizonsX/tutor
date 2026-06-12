@@ -145,7 +145,7 @@ export function startBrowserCognitiveOverlay({
   installDebugOverlay({ doc, win, overlay, now, devMode: isDevMode() });
 
   if (!config.featureEnabled || !doc?.body) {
-    setRuntimeState(doc, "disabled", "feature_disabled");
+    setRuntimeState(doc, "disabled", config.featureEnabled && !doc?.body ? "missing_document_body" : "feature_disabled");
     let startedFromConfig = false;
     const startFromConfig = (nextConfig) => {
       config = mergeConfig(config, nextConfig);
@@ -199,6 +199,7 @@ export function startBrowserCognitiveOverlay({
   const selectionStableMs = Math.max(config.evaluationDebounceMs ?? 0, SELECTION_STABLE_MS);
   const disableRuntime = () => {
     setRuntimeState(doc, "disabled", "feature_disabled");
+    stopLoops();
     win.clearTimeout?.(debounce);
     win.clearTimeout?.(selectionDebounce);
     win.clearTimeout?.(selectionFinalizeDebounce);
@@ -219,6 +220,8 @@ export function startBrowserCognitiveOverlay({
       disableRuntime();
     } else {
       setRuntimeState(doc, "started");
+      startLoops();
+      scheduleEvaluate();
     }
   } });
 
@@ -341,6 +344,12 @@ export function startBrowserCognitiveOverlay({
 
     try {
       const timestamp = now();
+      // Sweep expired failure entries so the map stays bounded on SPA pages.
+      // Entries are {failedAt, retryAt} objects (legacy: bare retryAt number).
+      for (const [failedKey, failedEntry] of failedExplanations) {
+        const entryRetryAt = typeof failedEntry === "number" ? failedEntry : failedEntry?.retryAt ?? 0;
+        if (entryRetryAt <= timestamp) failedExplanations.delete(failedKey);
+      }
       const fragment = contextTracker.update();
       if (!fragment) {
         return setLastSuppressedDecision(doc, "no_readable_fragment", null, {}, isDevMode());
@@ -476,6 +485,8 @@ export function startBrowserCognitiveOverlay({
         payload: buildAnalysisPayload(fragment, candidates, config)
       };
       let streamPromptShown = false;
+      let shownPromptEpoch = null;
+      let capturedController = null;
       const explanationVersion = await (agentClient?.streamExplanation
         ? runStreamingExplanation({
             agentClient,
@@ -488,8 +499,18 @@ export function startBrowserCognitiveOverlay({
             getRuntimeConfigVersion: () => runtimeConfigVersion,
             requestConfigVersion,
             isFeatureEnabled: () => config.featureEnabled,
-            setActiveController: (controller) => { activeStreamController = controller; },
-            onStreamPromptShown: () => { streamPromptShown = true; }
+            setActiveController: (controller) => {
+              activeStreamController = controller;
+              capturedController = controller;
+            },
+            onStreamPromptShown: () => {
+              streamPromptShown = true;
+              // This callback fires synchronously right after
+              // overlay.showStreaming, so the captured epoch identifies the
+              // exact prompt we showed. The dismissal guard below depends on
+              // that ordering — do not make this callback async.
+              shownPromptEpoch = overlay?.promptEpoch ?? null;
+            }
           })
         : composeShortExplanation({
             target: candidate,
@@ -498,7 +519,10 @@ export function startBrowserCognitiveOverlay({
             agentClient,
             config
           })).finally(() => {
-            if (activeStreamController?.signal?.aborted || activeStreamController) activeStreamController = null;
+            // Only clear our own controller: an unconditional reset could
+            // null out a newer request's controller once evaluate runs
+            // concurrently (currently serialized by `evaluating`).
+            if (activeStreamController === capturedController) activeStreamController = null;
             pendingExplanations.delete(explanationKey);
           });
       if (requestConfigVersion !== runtimeConfigVersion) {
@@ -522,6 +546,12 @@ export function startBrowserCognitiveOverlay({
           agentStatus: explanationVersion.status,
           agentReason: explanationVersion.reason ?? explanationVersion.unavailableReason
         };
+      }
+      if (streamPromptShown && shownPromptEpoch !== null && !overlay.isPromptLive(shownPromptEpoch)) {
+        // The user closed the streaming card while we awaited the final
+        // result; writing EXPLANATION_SHOWN/PARAGRAPH_PROMPTED now would
+        // train the profile on an explanation that was never accepted.
+        return suppressDecision(decision, "prompt_dismissed_during_stream", doc, { target: decision.candidate }, isDevMode());
       }
       failedExplanations.delete(explanationKey);
       const currentVersion = {
@@ -657,21 +687,35 @@ export function startBrowserCognitiveOverlay({
   win.addEventListener("pointermove", () => behaviorTracker.recordActivity(now()), { passive: true });
   win.addEventListener("keydown", () => behaviorTracker.recordActivity(now()), { passive: true });
 
+  // Single lifecycle seam for the periodic work: "disabled" must really stop
+  // the interval and the whole-body MutationObserver, not just hide the UI.
   const MutationObserverCtor = win.MutationObserver;
   const mutationObserver = MutationObserverCtor ? new MutationObserverCtor(scheduleEvaluate) : null;
-  mutationObserver?.observe?.(doc.body, { childList: true, subtree: true, characterData: true });
-  timer = win.setInterval?.(evaluate, config.evaluationIntervalMs);
+  let loopsRunning = false;
+  function startLoops() {
+    if (loopsRunning) return;
+    loopsRunning = true;
+    mutationObserver?.observe?.(doc.body, { childList: true, subtree: true, characterData: true });
+    timer = win.setInterval?.(evaluate, config.evaluationIntervalMs);
+  }
+  function stopLoops() {
+    if (!loopsRunning) return;
+    loopsRunning = false;
+    win.clearInterval?.(timer);
+    timer = null;
+    mutationObserver?.disconnect?.();
+  }
+  startLoops();
   scheduleEvaluate();
 
   return {
     started: true,
     evaluate,
     stop() {
-      win.clearInterval?.(timer);
+      stopLoops();
       win.clearTimeout?.(debounce);
       win.clearTimeout?.(selectionDebounce);
       win.clearTimeout?.(selectionFinalizeDebounce);
-      mutationObserver?.disconnect?.();
     },
     contextTracker,
     behaviorTracker,
@@ -779,15 +823,28 @@ function installRuntimeEnable({ doc, win, start } = {}) {
   }
 }
 
+// One dispatcher per storage.onChanged surface: the disabled bootstrap and
+// the started runtime both want config updates, and the bootstrap path
+// re-enters startBrowserCognitiveOverlay. Registering once and swapping the
+// active handler prevents listener accumulation across disable/enable cycles.
+const browserConfigDispatchers = new WeakMap();
+
 function installBrowserConfigUpdateListener({ win, onUpdate } = {}) {
   const chromeApi = win?.chrome ?? globalThis.chrome;
   const storage = chromeApi?.storage;
   if (!storage?.onChanged?.addListener || typeof onUpdate !== "function") return;
+  const existing = browserConfigDispatchers.get(storage.onChanged);
+  if (existing) {
+    existing.handler = onUpdate;
+    return;
+  }
+  const dispatcher = { handler: onUpdate };
+  browserConfigDispatchers.set(storage.onChanged, dispatcher);
   storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
     const nextConfig = changes?.[BROWSER_CONFIG_STORAGE_KEY]?.newValue;
     if (!nextConfig || typeof nextConfig !== "object") return;
-    onUpdate(nextConfig);
+    dispatcher.handler(nextConfig);
   });
 }
 

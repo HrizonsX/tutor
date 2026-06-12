@@ -152,7 +152,9 @@ test("content disabled bootstrap listener does not start duplicate runtime after
 
   await Promise.resolve();
   assert.equal(doc.documentElement.dataset.bcoState, "started");
-  assert.equal(storageChangeListeners.length, 2);
+  // A single dispatcher listener is registered; the bootstrap and started
+  // runtime swap the active handler instead of stacking listeners.
+  assert.equal(storageChangeListeners.length, 1);
 
   for (const listener of [...storageChangeListeners]) {
     listener({ [BROWSER_CONFIG_STORAGE_KEY]: { newValue: { featureEnabled: false } } }, "local");
@@ -164,7 +166,7 @@ test("content disabled bootstrap listener does not start duplicate runtime after
   }
 
   assert.equal(doc.documentElement.dataset.bcoState, "started");
-  assert.equal(storageChangeListeners.length, 2);
+  assert.equal(storageChangeListeners.length, 1);
 });
 
 test("selected term memory event waits for stable final selection", () => {
@@ -1158,6 +1160,92 @@ test("learning events carry hashed page metadata instead of raw URL and title", 
   runtime.stop();
 });
 
+test("dismissing the streaming card mid-stream blocks ledger writes for the late result", async () => {
+  const doc = fakeDocument();
+  const writes = [];
+  let resolveFinal;
+  const finalGate = new Promise((resolve) => {
+    resolveFinal = resolve;
+  });
+  const runtime = startBrowserCognitiveOverlay({
+    doc,
+    win: fakeWindow([], { getSelectionText: () => "Loquat" }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    agentClient: {
+      streamExplanation: async (input, { onEvent }) => {
+        onEvent({ type: StreamEventType.SESSION_START, sessionId: "stream_race", sequence: 0, target: input.target });
+        onEvent({ type: StreamEventType.LANE_DELTA, sessionId: "stream_race", sequence: 1, lane: StreamLane.DIRECT, text: "Loquat is a fruit." });
+        await finalGate;
+        return {
+          status: AgentResultStatus.AVAILABLE,
+          target: input.target,
+          text: "Loquat is a fruit.",
+          microExplanation: "Loquat is a fruit.",
+          versionMetadata: { id: "ver_race", source: "external_agent" }
+        };
+      }
+    },
+    memoryClient: { writeMemoryEvent: async (payload) => writes.push(payload) },
+    now: () => 1000
+  });
+  runtime.contextTracker.update = () => ({
+    id: "p-loquat",
+    type: "paragraph",
+    text: "Changtai loquat is a well-known agricultural product."
+  });
+  runtime.behaviorTracker.observeFragment = () => ({});
+  runtime.behaviorTracker.getSummary = () => ({
+    selectedPreciseTerm: true,
+    selectionText: "Loquat"
+  });
+
+  const evaluation = runtime.evaluate();
+  // The stream events above fire synchronously, so the streaming card is
+  // already visible; the user closes it while the final result is pending.
+  assert.equal(doc.body.querySelector("#browser-cognitive-overlay").hidden, false);
+  runtime.overlay.dismiss();
+  resolveFinal();
+  const decision = await evaluation;
+
+  assert.equal(decision.suppressions.includes("prompt_dismissed_during_stream"), true);
+  const eventTypes = writes.map((write) => write.event.type);
+  assert.equal(eventTypes.includes(MemoryEventType.EXPLANATION_SHOWN), false);
+  assert.equal(eventTypes.includes(MemoryEventType.PARAGRAPH_PROMPTED), false);
+  assert.equal(eventTypes.filter((type) => type === MemoryEventType.DISMISSED).length, 1);
+  assert.equal(runtime.overlay.currentPrompt, null);
+  runtime.stop();
+});
+
+test("feature gate hot disable stops the evaluation interval and re-enable restarts it", () => {
+  const doc = fakeDocument();
+  const timers = createFakeTimers();
+  const storageChangeListeners = [];
+  const runtime = startBrowserCognitiveOverlay({
+    doc,
+    win: fakeWindow([], { timers, storageChangeListeners }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    memoryClient: { writeMemoryEvent: async () => {} },
+    now: () => 1000
+  });
+
+  assert.equal(timers.activeIntervalCount(), 1);
+
+  for (const listener of [...storageChangeListeners]) {
+    listener({ [BROWSER_CONFIG_STORAGE_KEY]: { newValue: { featureEnabled: false } } }, "local");
+  }
+  assert.equal(doc.documentElement.dataset.bcoState, "disabled");
+  assert.equal(timers.activeIntervalCount(), 0);
+
+  for (const listener of [...storageChangeListeners]) {
+    listener({ [BROWSER_CONFIG_STORAGE_KEY]: { newValue: { featureEnabled: true } } }, "local");
+  }
+  assert.equal(doc.documentElement.dataset.bcoState, "started");
+  assert.equal(timers.activeIntervalCount(), 1);
+
+  runtime.stop();
+  assert.equal(timers.activeIntervalCount(), 0);
+});
+
 function fakeWindow(storageAccesses, options = {}) {
   const timers = options.timers;
   const storageChangeListeners = options.storageChangeListeners ?? [];
@@ -1209,6 +1297,7 @@ function fakeWindow(storageAccesses, options = {}) {
 function createFakeTimers() {
   let nextId = 1;
   const timeouts = new Map();
+  const intervals = new Map();
   return {
     setTimeout(handler) {
       const id = nextId;
@@ -1219,12 +1308,18 @@ function createFakeTimers() {
     clearTimeout(id) {
       timeouts.delete(id);
     },
-    setInterval() {
+    setInterval(handler) {
       const id = nextId;
       nextId += 1;
+      intervals.set(id, handler);
       return id;
     },
-    clearInterval() {},
+    clearInterval(id) {
+      intervals.delete(id);
+    },
+    activeIntervalCount() {
+      return intervals.size;
+    },
     runAll() {
       const pending = Array.from(timeouts.entries());
       timeouts.clear();

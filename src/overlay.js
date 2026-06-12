@@ -21,10 +21,19 @@ export class CognitiveOverlay {
     this.regenerationKeys = new Set();
     this.regenerating = false;
     this.streamState = null;
+    // Monotonic epoch: bumped on every show/showStreaming/dismiss so code
+    // that awaited across user interaction can tell whether the prompt it
+    // showed is still the live one (see isPromptLive).
+    this.promptEpoch = 0;
+  }
+
+  isPromptLive(epoch) {
+    return this.promptEpoch === epoch && Boolean(this.currentPrompt) && this.root?.hidden === false;
   }
 
   show(prompt) {
     if (!this.doc?.body || !prompt?.micro || !isDisplayablePrompt(prompt)) return;
+    this.promptEpoch += 1;
     this.currentPrompt = prompt;
     this.feedbackKeys.clear();
     this.regenerating = false;
@@ -47,6 +56,7 @@ export class CognitiveOverlay {
 
   showStreaming(prompt) {
     if (!this.doc?.body || !prompt || !isDisplayablePrompt(prompt)) return;
+    this.promptEpoch += 1;
     this.currentPrompt = {
       ...prompt,
       micro: prompt.micro ?? "",
@@ -228,6 +238,7 @@ export class CognitiveOverlay {
   }
 
   dismiss() {
+    this.promptEpoch += 1;
     if (this.root) {
       this.root.hidden = true;
       this.clearNode(this.root);

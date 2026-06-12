@@ -17,7 +17,9 @@ export const DEFAULT_CONFIG = Object.freeze({
     largeSelectionChars: 420,
     largeSelectionLines: 8,
     revisitWindowMs: 120000,
-    repeatedPauseWindowMs: 90000
+    repeatedPauseWindowMs: 90000,
+    maxTrackedFragments: 300,
+    maxTrackedConceptPauses: 300
   },
   inference: {
     showThreshold: 0.6,

@@ -51,7 +51,28 @@ export class BehaviorTracker {
     existing.lastSeenAt = timestamp;
     existing.type = fragment.type;
     this.fragments.set(fragment.id, existing);
+    this.evictStaleFragments();
     return this.getSummary(fragment.id, timestamp);
+  }
+
+  // SPA pages never reload, so tracked fragments and pause keys would grow
+  // without bound; evict the least recently seen entries past the cap.
+  evictStaleFragments() {
+    const limit = Number(this.config.maxTrackedFragments ?? 0);
+    if (!limit || this.fragments.size <= limit) return;
+    while (this.fragments.size > limit) {
+      let oldestKey = null;
+      let oldestAt = Infinity;
+      for (const [key, state] of this.fragments) {
+        if (key === this.currentFragmentId) continue;
+        if ((state.lastSeenAt ?? 0) < oldestAt) {
+          oldestAt = state.lastSeenAt ?? 0;
+          oldestKey = key;
+        }
+      }
+      if (oldestKey == null) break;
+      this.fragments.delete(oldestKey);
+    }
   }
 
   recordSelection({ text = "", fragment, timestamp = this.now(), validation = null }) {
@@ -93,6 +114,19 @@ export class BehaviorTracker {
     const recent = pauses.filter((pauseAt) => timestamp - pauseAt <= this.config.repeatedPauseWindowMs);
     recent.push(timestamp);
     this.conceptPauses.set(key, recent);
+    const limit = Number(this.config.maxTrackedConceptPauses ?? 0);
+    if (limit && this.conceptPauses.size > limit) {
+      let oldestKey = null;
+      let oldestAt = Infinity;
+      for (const [pauseKey, pauseList] of this.conceptPauses) {
+        const lastAt = pauseList[pauseList.length - 1] ?? 0;
+        if (lastAt < oldestAt) {
+          oldestAt = lastAt;
+          oldestKey = pauseKey;
+        }
+      }
+      if (oldestKey != null && oldestKey !== key) this.conceptPauses.delete(oldestKey);
+    }
   }
 
   getSummary(fragmentId = this.currentFragmentId, timestamp = this.now()) {
