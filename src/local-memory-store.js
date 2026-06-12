@@ -46,7 +46,7 @@ export const LOCAL_MEMORY_SUMMARIZER_VERSION = "local-memory-summarizer.v1";
 const USER_PROFILE_VERSION = "user-profile.v1";
 
 const SQLITE_FILE = "local-memory.sqlite";
-const SQLITE_SCHEMA_VERSION = 1;
+const SQLITE_SCHEMA_VERSION = 2;
 const MAX_EVIDENCE_IDS = 12;
 const require = createRequire(import.meta.url);
 const FEEDBACK_TYPES = new Set([
@@ -270,15 +270,19 @@ export function createLocalMemoryStore({
         now,
         index: data.events.length + data.profileEvents.length
       });
+      const candidate = createCandidateFromEvent(stored);
+      const storedCandidate = candidate
+        ? normalizeMemoryCandidate(candidate, { config, now, index: data.memoryCandidates.length })
+        : null;
+      // Disk first, RAM after commit: a crash mid-write must not leave the
+      // in-memory view ahead of the durable ledger.
+      withSqliteTransaction(() => {
+        writeSqliteRawEvent(stored);
+        if (storedCandidate) writeSqliteMemoryCandidate(storedCandidate);
+      });
       if (repository === "profile") data.profileEvents.push(stored);
       else data.events.push(stored);
-      writeSqliteRawEvent(stored);
-      const candidate = createCandidateFromEvent(stored);
-      if (candidate) {
-        const storedCandidate = normalizeMemoryCandidate(candidate, { config, now, index: data.memoryCandidates.length });
-        data.memoryCandidates.push(storedCandidate);
-        writeSqliteMemoryCandidate(storedCandidate);
-      }
+      if (storedCandidate) data.memoryCandidates.push(storedCandidate);
       markTargetStale(stored.canonicalName);
       markCognitiveMemoryStale(stored.canonicalName, stored.timestamp);
       scheduleSummarization();
@@ -287,8 +291,10 @@ export function createLocalMemoryStore({
     writeExplanationVersion(version = {}) {
       if (!runtime.available) return unavailableMemory(runtime.reason, { capabilityKind: "memory_event_write" });
       const stored = normalizeExplanation(version, { config, now, index: data.explanationVersions.length });
+      withSqliteTransaction(() => {
+        writeSqliteExplanationVersion(stored);
+      });
       data.explanationVersions.push(stored);
-      writeSqliteExplanationVersion(stored);
       markTargetStale(stored.target);
       markCognitiveMemoryStale(stored.target, stored.timestamp);
       scheduleSummarization();
@@ -466,15 +472,44 @@ export function createLocalMemoryStore({
     }
   };
 
+  // Multi-statement writes happen inside one transaction so a crash cannot
+  // leave a raw event without its FTS row or candidate. Nested calls reuse
+  // the outer transaction. Depth lives on runtime because this function is
+  // hoisted above the store's return statement.
+  function withSqliteTransaction(fn) {
+    if (!runtime.sqlite || (runtime.sqliteTransactionDepth ?? 0) > 0) return fn();
+    runtime.sqliteTransactionDepth = (runtime.sqliteTransactionDepth ?? 0) + 1;
+    try {
+      runtime.sqlite.exec("BEGIN IMMEDIATE");
+      try {
+        const result = fn();
+        runtime.sqlite.exec("COMMIT");
+        return result;
+      } catch (error) {
+        try {
+          runtime.sqlite.exec("ROLLBACK");
+        } catch {
+          // The connection may already be unusable; the original error wins.
+        }
+        throw error;
+      }
+    } finally {
+      runtime.sqliteTransactionDepth -= 1;
+    }
+  }
+
   function writeSqliteRawEvent(event) {
     if (!runtime.sqlite) return;
+    // Raw events are the evidence ledger: append-only, never rewritten by a
+    // colliding id.
     runSqlite(runtime.sqlite, `
-      INSERT OR REPLACE INTO raw_memory_events (
+      INSERT INTO raw_memory_events (
         id, repository, type, canonical_name, observed_alias, timestamp,
         knowledge_type, explanation_version_id, previous_explanation_version_id,
         requested_style, explanation_style, fact_sensitivity, feedback_event_id,
         context_json, source_event_ids_json, uncertainty_json, related_concepts_json, record_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO NOTHING
     `, [
       event.id,
       event.repository,
@@ -579,8 +614,10 @@ export function createLocalMemoryStore({
 
   function persistSqliteDerivedSummary(summary) {
     if (!runtime.sqlite || !summary?.canonicalName) return;
+    // Derived and retrieval summaries used to share retrieval_summaries and
+    // overwrote each other through the same canonical_name primary key.
     runSqlite(runtime.sqlite, `
-      INSERT OR REPLACE INTO retrieval_summaries (
+      INSERT OR REPLACE INTO derived_summaries (
         canonical_name, summary_json, text, source_event_ids_json,
         source_candidate_ids_json, timestamp, summarizer_version
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -593,7 +630,14 @@ export function createLocalMemoryStore({
       summary.timestamp,
       summary.summarizerVersion
     ]);
-    insertRetrievalFts(summary);
+    // writeDerivedSummary is the only FTS write source for some concepts, so
+    // the derived path keeps its own (idempotent) FTS row after the split.
+    replaceFtsRow(
+      "derived_summary",
+      `summary_${hashString(summary.canonicalName)}`,
+      summary.canonicalName,
+      expandFtsText([summary.canonicalName, JSON.stringify(summary.agentSummary ?? {})].filter(Boolean).join(" "))
+    );
   }
 
   function persistSqliteRetrievalSummary(summary) {
@@ -757,34 +801,44 @@ export function createLocalMemoryStore({
     }
   }
 
-  function insertRawEventFts(event) {
+  // Idempotent FTS writes: a re-summarized concept replaces its row instead
+  // of appending duplicates that skew bm25 corpus statistics.
+  function replaceFtsRow(rowKind, recordId, canonicalName, text) {
     if (!runtime.ftsAvailable) return;
+    runSqlite(runtime.sqlite, "DELETE FROM memory_fts WHERE row_kind = ? AND record_id = ?", [rowKind, recordId]);
     runSqlite(runtime.sqlite, "INSERT INTO memory_fts(row_kind, record_id, canonical_name, text) VALUES (?, ?, ?, ?)", [
+      rowKind,
+      recordId,
+      canonicalName,
+      text
+    ]);
+  }
+
+  function insertRawEventFts(event) {
+    replaceFtsRow(
       "raw_event",
       event.id,
       event.canonicalName,
       expandFtsText([event.canonicalName, event.observedAlias, event.type, event.knowledgeType].filter(Boolean).join(" "))
-    ]);
+    );
   }
 
   function insertExplanationFts(version) {
-    if (!runtime.ftsAvailable) return;
-    runSqlite(runtime.sqlite, "INSERT INTO memory_fts(row_kind, record_id, canonical_name, text) VALUES (?, ?, ?, ?)", [
+    replaceFtsRow(
       "explanation_version",
       version.id,
       version.target,
       expandFtsText([version.target, version.text, version.summary].filter(Boolean).join(" "))
-    ]);
+    );
   }
 
   function insertRetrievalFts(summary) {
-    if (!runtime.ftsAvailable) return;
-    runSqlite(runtime.sqlite, "INSERT INTO memory_fts(row_kind, record_id, canonical_name, text) VALUES (?, ?, ?, ?)", [
+    replaceFtsRow(
       "retrieval_summary",
-      summary.id ?? summary.canonicalName,
+      `retrieval_${hashString(summary.canonicalName)}`,
       summary.canonicalName,
       expandFtsText(summary.text ?? JSON.stringify(summary.agentSummary ?? summary))
-    ]);
+    );
   }
 
   function scheduleSummarization() {
@@ -955,15 +1009,17 @@ export function createLocalMemoryStore({
       memoryFreshness: "fresh"
     };
     upsertAgentSummary(summary);
-    persistSqliteConceptState(summary);
-    persistSqliteRetrievalSummary(data.retrievalSummaries[target]);
-    persistSqliteDerivedSummary(summary);
+    withSqliteTransaction(() => {
+      persistSqliteConceptState(summary);
+      persistSqliteRetrievalSummary(data.retrievalSummaries[target]);
+      persistSqliteDerivedSummary(summary);
+    });
     removeStaleTarget(target);
     data.summarizer.lastRunAt = timestamp;
     data.summarizer.lastError = null;
     data.summarizer.processedEventCount = data.events.length + data.profileEvents.length;
     rebuildConceptProjection(target, { summary });
-    persistSqliteSummarizerState();
+    withSqliteTransaction(() => persistSqliteSummarizerState());
     return summary;
   }
 
@@ -1865,6 +1921,15 @@ function initializeSQLiteSchema(db, { schemaVersion, now }) {
       timestamp INTEGER NOT NULL,
       summarizer_version TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS derived_summaries (
+      canonical_name TEXT PRIMARY KEY,
+      summary_json TEXT NOT NULL,
+      text TEXT NOT NULL,
+      source_event_ids_json TEXT NOT NULL,
+      source_candidate_ids_json TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      summarizer_version TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS summarizer_jobs (
       id TEXT PRIMARY KEY,
       canonical_name TEXT NOT NULL,
@@ -1937,9 +2002,13 @@ function initializeSQLiteSchema(db, { schemaVersion, now }) {
   `);
   try {
     db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(row_kind, record_id UNINDEXED, canonical_name, text)");
+    // One-time cleanup of duplicate FTS rows accumulated by the old bare
+    // INSERT path; keeps the newest row per (row_kind, record_id).
+    db.exec("DELETE FROM memory_fts WHERE rowid NOT IN (SELECT MAX(rowid) FROM memory_fts GROUP BY row_kind, record_id)");
   } catch {
     // FTS5 is optional; exact and recency retrieval still work.
   }
+  migrateDerivedSummariesOutOfRetrievalTable(db, { now });
   const currentVersion = readSqliteUserVersion(db);
   if (currentVersion < schemaVersion) {
     runSqlite(db, `
@@ -1956,6 +2025,71 @@ function initializeSQLiteSchema(db, { schemaVersion, now }) {
       JSON.stringify({ sqliteSchemaVersion: SQLITE_SCHEMA_VERSION })
     ]);
     db.exec(`PRAGMA user_version = ${Number(schemaVersion)}`);
+  }
+}
+
+// Real migration for the historical table sharing: derived summaries used to
+// be written into retrieval_summaries (same primary key) and clobbered the
+// retrieval rows. Move derived-shaped rows into derived_summaries. Detection
+// is idempotent: once moved, retrieval_summaries has no derived rows left.
+// Data reality: where a derived row overwrote a retrieval row the retrieval
+// text is gone; the next summarize pass rebuilds it.
+function migrateDerivedSummariesOutOfRetrievalTable(db, { now }) {
+  let candidates;
+  try {
+    candidates = allSqlite(db, `
+      SELECT canonical_name, summary_json, text, source_event_ids_json,
+             source_candidate_ids_json, timestamp, summarizer_version
+      FROM retrieval_summaries
+    `);
+  } catch {
+    return;
+  }
+  const derivedRows = candidates.filter((row) => {
+    const summary = parseJson(row.summary_json, null);
+    return Boolean(summary && (summary.kind === "target_memory_summary" || summary.targetState));
+  });
+  if (derivedRows.length === 0) return;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const row of derivedRows) {
+      runSqlite(db, `
+        INSERT OR REPLACE INTO derived_summaries (
+          canonical_name, summary_json, text, source_event_ids_json,
+          source_candidate_ids_json, timestamp, summarizer_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [
+        row.canonical_name,
+        row.summary_json,
+        row.text,
+        row.source_event_ids_json,
+        row.source_candidate_ids_json,
+        row.timestamp,
+        row.summarizer_version
+      ]);
+      runSqlite(db, "DELETE FROM retrieval_summaries WHERE canonical_name = ?", [row.canonical_name]);
+    }
+    runSqlite(db, `
+      INSERT OR REPLACE INTO schema_migrations (
+        id, from_version, to_version, status, timestamp, type, details_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [
+      `sqlite_layout_derived_split_${now()}`,
+      SQLITE_SCHEMA_VERSION - 1,
+      SQLITE_SCHEMA_VERSION,
+      "completed",
+      now(),
+      "sqlite_layout_migration",
+      JSON.stringify({ movedDerivedSummaries: derivedRows.length })
+    ]);
+    db.exec("COMMIT");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Surface the original failure below.
+    }
+    throw error;
   }
 }
 
@@ -1994,21 +2128,30 @@ function readSQLiteStoreData(db, schemaVersion) {
   }));
   const profile = getSqlite(db, "SELECT summary_json FROM profile_summary WHERE id = ?", ["profile_summary"]);
   data.profileSummary = profile ? parseJson(profile.summary_json, null) : null;
+  const registerDerivedSummary = (canonicalName, summary) => {
+    data.derivedSummaries[canonicalName] = summary;
+    data.agentSummaries.push({
+      id: summary.id,
+      canonicalName: summary.canonicalName,
+      sourceEventIds: summary.sourceEventIds ?? [],
+      uncertainty: summary.uncertainty?.confidence ?? "low",
+      timestamp: summary.timestamp,
+      summary: summary.agentSummary ?? {}
+    });
+  };
+  for (const row of allSqlite(db, "SELECT canonical_name, summary_json FROM derived_summaries")) {
+    const summary = parseJson(row.summary_json, null);
+    if (summary) registerDerivedSummary(row.canonical_name, summary);
+  }
   const retrievalRows = allSqlite(db, "SELECT canonical_name, summary_json FROM retrieval_summaries");
   for (const row of retrievalRows) {
     const summary = parseJson(row.summary_json, null);
     if (!summary) continue;
     data.retrievalSummaries[row.canonical_name] = summary;
-    if (summary.kind === "target_memory_summary" || summary.targetState) {
-      data.derivedSummaries[row.canonical_name] = summary;
-      data.agentSummaries.push({
-        id: summary.id,
-        canonicalName: summary.canonicalName,
-        sourceEventIds: summary.sourceEventIds ?? [],
-        uncertainty: summary.uncertainty?.confidence ?? "low",
-        timestamp: summary.timestamp,
-        summary: summary.agentSummary ?? {}
-      });
+    // Kind sniffing stays as a fallback for half-migrated databases where a
+    // derived-shaped row is still sitting in retrieval_summaries.
+    if ((summary.kind === "target_memory_summary" || summary.targetState) && !data.derivedSummaries[row.canonical_name]) {
+      registerDerivedSummary(row.canonical_name, summary);
     }
   }
   for (const row of allSqlite(db, "SELECT date, summary_json FROM daily_memory_summaries")) {
@@ -2194,7 +2337,10 @@ function normalizeMemoryEvent(event = {}, { repository, config, now, index }) {
     : sanitizeEventContext(event.context ?? {}, config);
 
   return {
-    id: event.id ?? `local_evt_${timestamp}_${index}`,
+    // The random component prevents id collisions after a restart (index
+    // restarts from the loaded event count, timestamps can repeat) so the
+    // append-only ledger never silently skips an event as a duplicate.
+    id: event.id ?? `local_evt_${timestamp}_${index}_${globalThis.crypto.randomUUID().slice(0, 8)}`,
     type: event.type ?? "unknown",
     repository,
     canonicalName,

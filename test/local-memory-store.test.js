@@ -59,6 +59,128 @@ test("persistent Local Memory Store survives restart and keeps minimal raw evide
   }
 });
 
+test("FTS rows stay unique per record across re-summarization and restart", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "bco-memory-fts-dedup-"));
+  try {
+    const first = createPersistentLocalMemoryStore({ directory, now: () => 1000, autoProcessBacklog: false });
+    first.writeEvent({ event: { id: "evt_fts_1", type: MemoryEventType.KNOWLEDGE_ENCOUNTERED, canonicalName: "枇杷", timestamp: 900 } });
+    first.processBacklog();
+    first.writeEvent({ event: { id: "evt_fts_2", type: MemoryEventType.KNOWLEDGE_ENCOUNTERED, canonicalName: "枇杷", timestamp: 950 } });
+    first.processBacklog();
+    first.close();
+
+    const second = createPersistentLocalMemoryStore({ directory, now: () => 1200, autoProcessBacklog: false });
+    second.writeEvent({ event: { id: "evt_fts_3", type: MemoryEventType.KNOWLEDGE_ENCOUNTERED, canonicalName: "枇杷", timestamp: 1100 } });
+    second.processBacklog();
+    second.close();
+
+    const db = new DatabaseSync(join(directory, "local-memory.sqlite"));
+    const duplicates = db.prepare(`
+      SELECT row_kind, record_id, COUNT(*) AS n
+      FROM memory_fts
+      GROUP BY row_kind, record_id
+      HAVING n > 1
+    `).all();
+    const retrievalRows = db.prepare("SELECT COUNT(*) AS n FROM memory_fts WHERE row_kind = 'retrieval_summary'").get();
+    db.close();
+
+    assert.deepEqual(duplicates, []);
+    assert.equal(retrievalRows.n, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy databases move derived rows out of retrieval_summaries and dedupe FTS on open", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "bco-memory-migrate-"));
+  try {
+    const seed = createPersistentLocalMemoryStore({ directory, now: () => 1000, autoProcessBacklog: false });
+    seed.writeEvent({ event: { id: "evt_legacy", type: MemoryEventType.KNOWLEDGE_ENCOUNTERED, canonicalName: "常太", timestamp: 900 } });
+    seed.processBacklog();
+    seed.close();
+
+    // Simulate the historical clobbering layout: the derived summary lives in
+    // retrieval_summaries (overwriting the retrieval row) and FTS has
+    // duplicate rows from the old bare-INSERT path.
+    const corrupt = new DatabaseSync(join(directory, "local-memory.sqlite"));
+    const derived = corrupt.prepare("SELECT * FROM derived_summaries WHERE canonical_name = ?").get("常太");
+    assert.ok(derived, "seed store should have written a derived summary");
+    corrupt.prepare(`
+      INSERT OR REPLACE INTO retrieval_summaries (
+        canonical_name, summary_json, text, source_event_ids_json,
+        source_candidate_ids_json, timestamp, summarizer_version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      derived.canonical_name,
+      derived.summary_json,
+      derived.text,
+      derived.source_event_ids_json,
+      derived.source_candidate_ids_json,
+      derived.timestamp,
+      derived.summarizer_version
+    );
+    corrupt.prepare("DELETE FROM derived_summaries").run();
+    corrupt.prepare(`
+      INSERT INTO memory_fts(row_kind, record_id, canonical_name, text)
+      SELECT row_kind, record_id, canonical_name, text FROM memory_fts
+    `).run();
+    corrupt.close();
+
+    const reopened = createPersistentLocalMemoryStore({ directory, now: () => 2000, autoProcessBacklog: false });
+    const summary = reopened.readDerivedSummary("常太");
+    reopened.close();
+
+    const check = new DatabaseSync(join(directory, "local-memory.sqlite"));
+    const movedCount = check.prepare("SELECT COUNT(*) AS n FROM derived_summaries").get();
+    const leftoverDerivedShapes = check.prepare("SELECT summary_json FROM retrieval_summaries").all()
+      .map((row) => JSON.parse(row.summary_json))
+      .filter((parsed) => parsed.kind === "target_memory_summary" || parsed.targetState);
+    const duplicates = check.prepare(`
+      SELECT COUNT(*) AS n FROM (
+        SELECT row_kind, record_id FROM memory_fts GROUP BY row_kind, record_id HAVING COUNT(*) > 1
+      )
+    `).get();
+    const migration = check.prepare("SELECT * FROM schema_migrations WHERE type = 'sqlite_layout_migration'").all();
+    check.close();
+
+    assert.ok(summary, "derived summary should be recallable after migration");
+    assert.equal(movedCount.n, 1);
+    assert.deepEqual(leftoverDerivedShapes, []);
+    assert.equal(duplicates.n, 0);
+    assert.equal(migration.length >= 1, true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("raw event ledger is append-only and generated ids never collide across restarts", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "bco-memory-append-"));
+  try {
+    const first = createPersistentLocalMemoryStore({ directory, now: () => 1000, autoProcessBacklog: false });
+    first.writeEvent({ event: { id: "evt_dup", type: MemoryEventType.KNOWLEDGE_ENCOUNTERED, canonicalName: "First Concept", timestamp: 900 } });
+    first.writeEvent({ event: { id: "evt_dup", type: MemoryEventType.KNOWLEDGE_ENCOUNTERED, canonicalName: "Second Concept", timestamp: 950 } });
+    const generatedA = first.writeEvent({ event: { type: MemoryEventType.KNOWLEDGE_ENCOUNTERED, canonicalName: "Auto Id", timestamp: 960 } });
+    first.close();
+
+    const second = createPersistentLocalMemoryStore({ directory, now: () => 1000, autoProcessBacklog: false });
+    const generatedB = second.writeEvent({ event: { type: MemoryEventType.KNOWLEDGE_ENCOUNTERED, canonicalName: "Auto Id", timestamp: 960 } });
+    second.close();
+
+    const db = new DatabaseSync(join(directory, "local-memory.sqlite"));
+    const dupRow = db.prepare("SELECT canonical_name FROM raw_memory_events WHERE id = 'evt_dup'").all();
+    const autoRows = db.prepare("SELECT id FROM raw_memory_events WHERE canonical_name = 'Auto Id'").all();
+    db.close();
+
+    // The colliding id keeps the first write instead of rewriting history.
+    assert.equal(dupRow.length, 1);
+    assert.equal(dupRow[0].canonical_name, "First Concept");
+    assert.notEqual(generatedA.id, generatedB.id);
+    assert.equal(autoRows.length, 2);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("Memory Summarizer derives evidence-backed target state and explanation preferences", () => {
   const store = createLocalMemoryStore({ now: () => 2000, autoProcessBacklog: false });
   store.writeEvent({ event: { id: "evt_confuse_1", type: MemoryEventType.REPEATED_CONFUSION, canonicalName: "PPO clipping", timestamp: 1000 } });

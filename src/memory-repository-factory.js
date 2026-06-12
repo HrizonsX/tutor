@@ -598,14 +598,7 @@ async function insertRawMemoryEvent(connection, schema, event = {}) {
       knowledge_type, explanation_version_id, context_json,
       source_event_ids_json, uncertainty_json, related_concepts_json, record_json
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-    ON CONFLICT (id) DO UPDATE SET
-      repository = EXCLUDED.repository,
-      type = EXCLUDED.type,
-      canonical_name = EXCLUDED.canonical_name,
-      observed_alias = EXCLUDED.observed_alias,
-      timestamp = EXCLUDED.timestamp,
-      context_json = EXCLUDED.context_json,
-      record_json = EXCLUDED.record_json
+    ON CONFLICT (id) DO NOTHING
   `, [
     event.id,
     event.repository ?? "learning",
