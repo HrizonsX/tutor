@@ -307,3 +307,159 @@ Gateway / Local Agent Runtime SHALL own relation proposer dispatch and SHALL NOT
 - **WHEN** relation discovery is scheduled by the gateway after successful explanation persistence
 - **THEN** the gateway SHALL dispatch relation proposal through runtime-owned provider configuration
 - **AND** it SHALL persist only gated relation records.
+
+### Requirement: Gateway Is The Runtime Intelligence Boundary
+The localhost gateway SHALL expose the Local Agent Runtime as the only intelligent boundary for browser plugin explain, rewrite, memory, provider, health, and diagnostics requests.
+
+#### Scenario: Explain enters runtime pipeline
+- **GIVEN** the browser extension posts a stateless explain request to the gateway
+- **WHEN** the gateway handles `/explain`
+- **THEN** it SHALL route the request through runtime input filtering, context filtering, memory retrieval, decision policy, optional provider adapter dispatch, and post-result persistence
+- **AND** it SHALL NOT act as a pass-through proxy directly from browser request to provider request.
+
+#### Scenario: Rewrite enters runtime pipeline
+- **GIVEN** the browser extension posts a stateless rewrite request with the current previous version and current feedback event
+- **WHEN** the gateway handles `/rewrite`
+- **THEN** it SHALL route the request through runtime-owned memory retrieval and decision policy
+- **AND** it SHALL use runtime-derived explanation preferences when available.
+
+### Requirement: Gateway Ignores Browser Memory Payloads
+The localhost gateway SHALL ignore browser-provided long-term memory fields when preparing explain, rewrite, or provider requests.
+
+#### Scenario: Browser sends stale memory fields
+- **GIVEN** an incoming gateway request includes browser-provided memory packet, profile hints, feedback history, concept familiarity, prior explanations, or derived summaries
+- **WHEN** the gateway prepares runtime decision inputs
+- **THEN** it SHALL strip or ignore those fields
+- **AND** it SHALL query the Local Memory Store for any personalization needed by the runtime.
+
+### Requirement: Gateway Returns Runtime Decision Metadata
+The localhost gateway SHALL return structured runtime decision metadata for explain and rewrite requests.
+
+#### Scenario: Provider call is skipped
+- **GIVEN** runtime decision policy returns an existing explanation, invalid-input rejection, muted rejection, duplicate suppression, or degraded memory response
+- **WHEN** the gateway responds to the browser extension
+- **THEN** the response SHALL include decision kind, normalized reason, provider call status, memory freshness, and relevant version metadata when available
+- **AND** the browser extension SHALL NOT need to infer the decision by parsing explanation text.
+
+#### Scenario: Provider call succeeds
+- **GIVEN** runtime decision policy calls a provider and receives a valid structured response
+- **WHEN** the gateway responds to the browser extension
+- **THEN** the response SHALL include provider metadata, explanation version metadata, memory write status, decision kind `call_provider`, and summarizer enqueue status.
+
+### Requirement: Select Memory Repository Backend
+Gateway / Local Agent Runtime SHALL select the active memory repository backend from runtime configuration while preserving browser-facing endpoint contracts.
+
+#### Scenario: Layered repository configured
+- **WHEN** runtime configuration selects the layered memory repository
+- **THEN** Gateway / Local Agent Runtime SHALL route health, memory event writes, memory queries, explain/rewrite memory injection, relation discovery, and report generation through the layered repository
+- **AND** the browser extension SHALL continue using the existing endpoint family.
+
+#### Scenario: Fallback repository configured
+- **WHEN** runtime configuration selects SQLite or in-memory local store mode
+- **THEN** Gateway / Local Agent Runtime SHALL route memory operations through the existing Local Memory Store
+- **AND** browser requests SHALL not need to distinguish the backend.
+
+### Requirement: Report Layered Memory Health
+Gateway health and diagnostics SHALL expose redacted layered memory repository status when the layered backend is active.
+
+#### Scenario: Health includes layered components
+- **WHEN** `/health` is requested and layered memory is active
+- **THEN** the response SHALL include redacted Postgres, Redis, vector adapter, outbox worker, schema, and projection freshness status
+- **AND** it SHALL not expose connection secrets, raw event payloads, full page text, provider tokens, or evidence snippets.
+
+#### Scenario: Layer is degraded
+- **WHEN** Postgres, Redis, vector recall, or outbox projection is degraded
+- **THEN** gateway health SHALL identify the degraded layer and reason
+- **AND** proactive browser behavior SHALL be able to fail quietly or proceed with bounded degraded memory status.
+
+### Requirement: Preserve Stateless Browser Boundary
+Gateway / Local Agent Runtime SHALL keep the browser extension stateless with respect to layered memory storage and recall planning.
+
+#### Scenario: Browser sends memory fields
+- **WHEN** an explain or rewrite request includes browser-provided memory packet, relation candidates, vector candidates, daily summaries, or memory bridges
+- **THEN** Gateway / Local Agent Runtime SHALL ignore those fields for personalization
+- **AND** it SHALL use only the active runtime-owned memory repository.
+
+#### Scenario: Gateway unavailable
+- **WHEN** the active memory repository is unavailable or unpaired
+- **THEN** browser extension code SHALL receive structured unavailable or degraded memory results
+- **AND** it SHALL not fall back to IndexedDB, localStorage, sessionStorage, chrome storage, or page-lifetime memory objects.
+
+### Requirement: Inject Layered Memory Into Provider Requests
+Gateway / Local Agent Runtime SHALL inject sanitized layered memory context into explain and rewrite provider requests when the layered repository is active.
+
+#### Scenario: Layered memory has selected bridges
+- **WHEN** an explain or rewrite request has selected exact, session, relation, or vector recall bridges
+- **THEN** the provider request SHALL include only policy-selected bounded memory context
+- **AND** each bridge SHALL include source role, relation or recall reason, evidence ids when available, uncertainty, and non-fact-source caution.
+
+#### Scenario: Exact prior explanation exists only for target
+- **WHEN** exact prior explanation reuse is considered
+- **THEN** Gateway / Local Agent Runtime SHALL only return an existing explanation for the same canonical target
+- **AND** related or vector-recalled concepts SHALL not bypass provider generation as if they were exact target history.
+
+### Requirement: Gateway Exposes Streaming Explanation Session
+Gateway / Local Agent Runtime SHALL expose a paired local streaming explanation endpoint or equivalent protocol action for dual-lane explanation sessions.
+
+#### Scenario: Streaming capability is advertised
+- **WHEN** gateway health or capability discovery is requested
+- **THEN** the gateway SHALL report whether streaming explanation sessions are supported
+- **AND** browser clients SHALL be able to fall back to existing non-stream `/explain` when streaming is unavailable.
+
+#### Scenario: Existing explain endpoint remains compatible
+- **WHEN** a browser client posts to existing `/explain`
+- **THEN** the gateway SHALL preserve the current non-stream JSON response behavior
+- **AND** streaming support SHALL NOT require existing callers to handle streamed events.
+
+### Requirement: Gateway Orchestrates Direct And Association Lanes
+Gateway / Local Agent Runtime SHALL orchestrate direct and association lanes for a streaming session while keeping memory recall runtime-owned.
+
+#### Scenario: Direct lane starts without memory recall
+- **GIVEN** a valid streaming explain request is accepted
+- **WHEN** the direct lane provider request is created
+- **THEN** the gateway SHALL create a plain-text provider request with target and minimal context
+- **AND** it SHALL exclude runtime memory recall fields from that direct lane request.
+
+#### Scenario: Association lane runs recall in parallel
+- **GIVEN** a valid streaming explain request is accepted
+- **WHEN** the streaming session starts
+- **THEN** the gateway SHALL begin runtime memory recall for the association lane without blocking direct lane deltas
+- **AND** the association lane SHALL use only runtime-selected memory bridges.
+
+#### Scenario: Browser memory fields are ignored
+- **GIVEN** a streaming explain request includes browser-provided memory packets, memory bridges, relation candidates, or daily summaries
+- **WHEN** the gateway prepares either lane
+- **THEN** Gateway / Local Agent Runtime SHALL ignore those browser-provided memory fields
+- **AND** it SHALL use only runtime-owned memory state.
+
+### Requirement: Gateway Handles Association Recall Outcomes
+Gateway / Local Agent Runtime SHALL convert association recall outcomes into stream events and provider calls.
+
+#### Scenario: Reliable bridges trigger association generation
+- **GIVEN** runtime recall returns one or more overlay-eligible memory bridges
+- **WHEN** association generation starts
+- **THEN** the gateway SHALL emit recall status with bounded bridge display names
+- **AND** it SHALL call the provider with an association-focused prompt.
+
+#### Scenario: No reliable bridge skips provider
+- **GIVEN** runtime recall returns no overlay-eligible memory bridge
+- **WHEN** association recall completes
+- **THEN** the gateway SHALL finalize the association lane with reason `no_memory_bridge` or `weak_candidates_only`
+- **AND** it SHALL NOT dispatch an association provider call.
+
+### Requirement: Gateway Finalizes Lane Results
+Gateway / Local Agent Runtime SHALL wrap streamed lane text in stable Agent result envelopes for final events, persistence, and diagnostics.
+
+#### Scenario: Direct final result is wrapped
+- **WHEN** direct lane streaming completes successfully
+- **THEN** the final direct result SHALL include status, lane id, target, text, provider role, provider mode, model metadata, and version metadata.
+
+#### Scenario: Association final result includes recall metadata
+- **WHEN** association lane streaming completes successfully
+- **THEN** the final association result SHALL include selected memory bridge metadata, recall policy metadata, and non-fact-source caution metadata
+- **AND** it SHALL preserve the association lane id.
+
+#### Scenario: Lane failures remain structured
+- **WHEN** provider dispatch, local cancellation, timeout, or stream parsing fails during a lane
+- **THEN** the gateway SHALL emit a structured unavailable or invalid lane result with a normalized reason
+- **AND** it SHALL NOT expose provider tokens, pairing tokens, raw memory payloads, or full page text.
