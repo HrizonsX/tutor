@@ -1246,6 +1246,261 @@ test("feature gate hot disable stops the evaluation interval and re-enable resta
   assert.equal(timers.activeIntervalCount(), 0);
 });
 
+function availableMemoryPacket(canonicalName, overrides = {}) {
+  return {
+    status: AgentResultStatus.AVAILABLE,
+    memoryPacket: {
+      target: { canonicalName },
+      derivedSignals: {},
+      cooldowns: {},
+      profileHints: {},
+      feedbackEvents: [],
+      priorExplanations: [],
+      relatedObjects: [],
+      ...overrides
+    }
+  };
+}
+
+test("gateway marked-known memory suppresses a selection repeat prompt across pages", async () => {
+  const doc = fakeDocument();
+  const explanations = [];
+  const memoryQueries = [];
+  const runtime = startBrowserCognitiveOverlay({
+    doc,
+    win: fakeWindow([], { getSelectionText: () => "KL divergence" }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true, devMode: true }),
+    agentClient: {
+      composeShortExplanation: async (input) => {
+        explanations.push(input);
+        return {
+          status: AgentResultStatus.AVAILABLE,
+          target: input.target,
+          microExplanation: "Must not be requested.",
+          versionMetadata: { id: "ver_known", source: "external_agent" }
+        };
+      }
+    },
+    memoryClient: {
+      writeMemoryEvent: async () => {},
+      queryMemory: async (query) => {
+        memoryQueries.push(query);
+        return availableMemoryPacket(query.canonicalName, {
+          derivedSignals: { recently_marked_known: true },
+          profileHints: { familiarObject: true }
+        });
+      }
+    },
+    now: () => 1000
+  });
+  runtime.contextTracker.update = () => ({
+    id: "p-kl",
+    type: "paragraph",
+    text: "The KL divergence term appears in this sentence."
+  });
+  runtime.behaviorTracker.observeFragment = () => ({});
+  runtime.behaviorTracker.getSummary = () => ({
+    selectedPreciseTerm: true,
+    selectionText: "KL divergence"
+  });
+
+  await runtime.evaluate();
+
+  assert.equal(memoryQueries.length, 1);
+  assert.equal(memoryQueries[0].canonicalName, "KL divergence");
+  assert.equal(memoryQueries[0].allowSyncSummarize, false);
+  assert.equal(explanations.length, 0);
+  const decision = JSON.parse(doc.documentElement.dataset.bcoLastDecision);
+  assert.equal(decision.shouldShow, false);
+  assert.ok(decision.suppressions.includes(SuppressionReason.RECENTLY_MARKED_KNOWN));
+  runtime.stop();
+});
+
+test("gateway weak-memory signal lets dwell trigger an explanation dwell alone would not", async () => {
+  const doc = fakeDocument();
+  const explanations = [];
+  const runtime = startBrowserCognitiveOverlay({
+    doc,
+    win: fakeWindow([]),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    agentClient: {
+      composeShortExplanation: async (input) => {
+        explanations.push(input);
+        return {
+          status: AgentResultStatus.AVAILABLE,
+          target: input.target,
+          microExplanation: "The KV cache reuses attention keys and values.",
+          versionMetadata: { id: "ver_weak", source: "external_agent" }
+        };
+      }
+    },
+    memoryClient: {
+      writeMemoryEvent: async () => {},
+      queryMemory: async (query) => availableMemoryPacket(query.canonicalName, {
+        derivedSignals: { possibly_weak: true }
+      })
+    },
+    now: () => 1000
+  });
+  runtime.contextTracker.update = () => ({
+    id: "p-kv",
+    type: "paragraph",
+    text: "The KV cache stores keys and values."
+  });
+  runtime.behaviorTracker.observeFragment = () => ({});
+  runtime.behaviorTracker.getSummary = () => ({
+    dwellSignal: true,
+    dwellMs: 20000
+  });
+
+  await runtime.evaluate();
+
+  assert.equal(explanations.length, 1);
+  assert.equal(explanations[0].target.canonicalName, "KV cache");
+  assert.equal(doc.body.querySelector("#browser-cognitive-overlay").hidden, false);
+  runtime.stop();
+});
+
+test("unavailable gateway memory degrades scoring silently and enters a failure cooldown", async () => {
+  const doc = fakeDocument();
+  const explanations = [];
+  const memoryQueries = [];
+  const runtime = startBrowserCognitiveOverlay({
+    doc,
+    win: fakeWindow([], { getSelectionText: () => "KL divergence" }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    agentClient: {
+      composeShortExplanation: async (input) => {
+        explanations.push(input);
+        return {
+          status: AgentResultStatus.AVAILABLE,
+          target: input.target,
+          microExplanation: "KL divergence keeps policy updates close.",
+          versionMetadata: { id: "ver_kl", source: "external_agent" }
+        };
+      }
+    },
+    memoryClient: {
+      writeMemoryEvent: async () => {},
+      queryMemory: async (query) => {
+        memoryQueries.push(query);
+        return { status: AgentResultStatus.UNAVAILABLE, reason: "local_gateway_unreachable" };
+      }
+    },
+    now: () => 1000
+  });
+  runtime.contextTracker.update = () => ({
+    id: "p-kl",
+    type: "paragraph",
+    text: "The KL divergence term appears in this sentence."
+  });
+  runtime.behaviorTracker.observeFragment = () => ({});
+  runtime.behaviorTracker.getSummary = () => ({
+    selectedPreciseTerm: true,
+    selectionText: "KL divergence"
+  });
+
+  await runtime.evaluate();
+  assert.equal(explanations.length, 1, "scoring must keep pre-memory behavior when the gateway is down");
+  assert.equal(doc.body.querySelector("#browser-cognitive-overlay").hidden, false);
+
+  await runtime.evaluate();
+  assert.equal(memoryQueries.length, 1, "failure cooldown must stop repeat queries");
+  runtime.stop();
+});
+
+test("memory context is cached per concept within the TTL", async () => {
+  const doc = fakeDocument();
+  const memoryQueries = [];
+  const runtime = startBrowserCognitiveOverlay({
+    doc,
+    win: fakeWindow([], { getSelectionText: () => "KL divergence" }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    agentClient: {
+      composeShortExplanation: async (input) => ({
+        status: AgentResultStatus.AVAILABLE,
+        target: input.target,
+        microExplanation: "KL divergence keeps policy updates close.",
+        versionMetadata: { id: "ver_kl", source: "external_agent" }
+      })
+    },
+    memoryClient: {
+      writeMemoryEvent: async () => {},
+      queryMemory: async (query) => {
+        memoryQueries.push(query);
+        return availableMemoryPacket(query.canonicalName);
+      }
+    },
+    now: () => 1000
+  });
+  runtime.contextTracker.update = () => ({
+    id: "p-kl",
+    type: "paragraph",
+    text: "The KL divergence term appears in this sentence."
+  });
+  runtime.behaviorTracker.observeFragment = () => ({});
+  runtime.behaviorTracker.getSummary = () => ({
+    selectedPreciseTerm: true,
+    selectionText: "KL divergence"
+  });
+
+  await runtime.evaluate();
+  await runtime.evaluate();
+
+  assert.equal(memoryQueries.length, 1, "second evaluate within the TTL must reuse the cached packet");
+  runtime.stop();
+});
+
+test("gateway marked-wrong feedback tightens fact sensitivity before prompting", async () => {
+  const doc = fakeDocument();
+  const explanations = [];
+  const runtime = startBrowserCognitiveOverlay({
+    doc,
+    win: fakeWindow([], { getSelectionText: () => "KL divergence" }),
+    config: mergeConfig(DEFAULT_CONFIG, {
+      featureEnabled: true,
+      devMode: true,
+      knowledge: { factSensitiveFallback: "require_source" }
+    }),
+    agentClient: {
+      composeShortExplanation: async (input) => {
+        explanations.push(input);
+        return {
+          status: AgentResultStatus.AVAILABLE,
+          target: input.target,
+          microExplanation: "Must not be requested.",
+          versionMetadata: { id: "ver_wrong", source: "external_agent" }
+        };
+      }
+    },
+    memoryClient: {
+      writeMemoryEvent: async () => {},
+      queryMemory: async (query) => availableMemoryPacket(query.canonicalName, {
+        feedbackEvents: [{ id: "evt_wrong", type: MemoryEventType.MARKED_WRONG, canonicalName: query.canonicalName }]
+      })
+    },
+    now: () => 1000
+  });
+  runtime.contextTracker.update = () => ({
+    id: "p-kl",
+    type: "paragraph",
+    text: "The KL divergence term appears in this sentence."
+  });
+  runtime.behaviorTracker.observeFragment = () => ({});
+  runtime.behaviorTracker.getSummary = () => ({
+    selectedPreciseTerm: true,
+    selectionText: "KL divergence"
+  });
+
+  await runtime.evaluate();
+
+  assert.equal(explanations.length, 0);
+  const decision = JSON.parse(doc.documentElement.dataset.bcoLastDecision);
+  assert.equal(decision.shouldShow, false);
+  assert.ok(decision.suppressions.includes(SuppressionReason.FACT_SENSITIVE_UNVERIFIED));
+  runtime.stop();
+});
+
 function fakeWindow(storageAccesses, options = {}) {
   const timers = options.timers;
   const storageChangeListeners = options.storageChangeListeners ?? [];

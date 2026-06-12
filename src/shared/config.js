@@ -31,7 +31,17 @@ export const DEFAULT_CONFIG = Object.freeze({
     profileDifficultyBoost: 0.18,
     markedKnownPenalty: 0.28,
     mutedPenalty: 0.6,
-    wrongExplanationPenalty: 0.2
+    wrongExplanationPenalty: 0.2,
+    // Gateway memory lookups on the scoring path: bounded latency so the
+    // evaluate loop never stalls on a wedged gateway, bounded frequency so a
+    // localhost roundtrip happens at most once per concept per TTL window.
+    memoryContext: {
+      enabled: true,
+      ttlMs: 60 * 1000,
+      timeoutMs: 400,
+      failureCooldownMs: 30 * 1000,
+      maxEntries: 64
+    }
   },
   knowledge: {
     maxCandidates: 5,
@@ -97,7 +107,11 @@ export function mergeConfig(base, override = {}) {
   const output = { ...base, ...safeOverride };
   output.privacy = { ...base.privacy, ...override.privacy };
   output.behavior = { ...base.behavior, ...override.behavior };
-  output.inference = { ...base.inference, ...override.inference };
+  output.inference = {
+    ...base.inference,
+    ...override.inference,
+    memoryContext: { ...base.inference?.memoryContext, ...override.inference?.memoryContext }
+  };
   output.knowledge = { ...base.knowledge, ...override.knowledge };
   output.profile = { ...base.profile, ...override.profile };
   output.composer = { ...base.composer, ...override.composer };

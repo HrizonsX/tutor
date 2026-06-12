@@ -45,6 +45,85 @@ export function startBrowserCognitiveOverlay({
   const writeLearningEvent = (event) => {
     void memoryClient?.writeMemoryEvent?.({ event, repository: "learning" });
   };
+  // Gateway memory context for intervention scoring: per-concept TTL cache
+  // with in-flight dedup, a hard wait budget per evaluate pass, and a global
+  // failure cooldown so an unreachable gateway costs one failed roundtrip per
+  // window instead of one per concept per pass.
+  const memoryContexts = new Map();
+  let memoryContextFailedAt = 0;
+  const memoryContextSettings = () => config.inference?.memoryContext ?? {};
+  const pruneMemoryContexts = () => {
+    const maxEntries = memoryContextSettings().maxEntries ?? 64;
+    while (memoryContexts.size > maxEntries) {
+      let oldestKey = null;
+      let oldestAt = Infinity;
+      for (const [entryKey, entry] of memoryContexts) {
+        if (entry.fetchedAt < oldestAt) {
+          oldestAt = entry.fetchedAt;
+          oldestKey = entryKey;
+        }
+      }
+      if (oldestKey === null) break;
+      memoryContexts.delete(oldestKey);
+    }
+  };
+  const startMemoryContextQuery = (key, candidate, timestamp) => {
+    const promise = (async () => {
+      try {
+        const result = await memoryClient.queryMemory({
+          canonicalName: key,
+          candidate: {
+            canonicalName: candidate.canonicalName,
+            observedText: candidate.observedText,
+            knowledgeType: candidate.knowledgeType
+          },
+          timestamp,
+          allowSyncSummarize: false
+        });
+        if (result?.status === AgentResultStatus.AVAILABLE && result.memoryPacket) {
+          memoryContexts.set(key, { packet: result.memoryPacket, fetchedAt: now(), promise: null });
+          pruneMemoryContexts();
+          return result.memoryPacket;
+        }
+        memoryContextFailedAt = now();
+        memoryContexts.delete(key);
+        return null;
+      } catch {
+        memoryContextFailedAt = now();
+        memoryContexts.delete(key);
+        return null;
+      }
+    })();
+    memoryContexts.set(key, { packet: null, fetchedAt: 0, promise });
+    pruneMemoryContexts();
+    return promise;
+  };
+  // Returns null or a cached packet synchronously; returns a promise only
+  // when a real query is in flight. The synchronous fast path matters: the
+  // evaluate pass must not yield a microtask when there is nothing to await,
+  // or the stream-dismissal race guard's synchronous ordering breaks.
+  const fetchMemoryContextPacket = (candidate, timestamp) => {
+    const settings = memoryContextSettings();
+    if (settings.enabled === false) return null;
+    if (typeof memoryClient?.queryMemory !== "function") return null;
+    if (memoryContextFailedAt && timestamp - memoryContextFailedAt < (settings.failureCooldownMs ?? 30000)) {
+      return null;
+    }
+    const key = candidate.canonicalName;
+    if (!key) return null;
+    const cached = memoryContexts.get(key);
+    if (cached?.packet && timestamp - cached.fetchedAt < (settings.ttlMs ?? 60000)) {
+      return cached.packet;
+    }
+    const pending = cached?.promise ?? startMemoryContextQuery(key, candidate, timestamp);
+    if (typeof win?.setTimeout !== "function") return pending;
+    // Hard wait budget: on a wedged gateway this pass scores with the
+    // ephemeral context while the query settles into the cache for later.
+    return Promise.race([
+      pending,
+      new Promise((resolve) => win.setTimeout(() => resolve(null), settings.timeoutMs ?? 400))
+    ]);
+  };
   const createEvent = (event = {}) => {
     const timestamp = event.timestamp ?? now();
     const canonicalName = normalizeKnowledgeObjectName(event.concept ?? event.canonicalName ?? "");
@@ -385,10 +464,19 @@ export function startBrowserCognitiveOverlay({
         return setLastSuppressedDecision(doc, "no_candidate", fragment, {}, isDevMode());
       }
 
+      let memoryPacket = fetchMemoryContextPacket(top, timestamp);
+      if (memoryPacket && typeof memoryPacket.then === "function") {
+        memoryPacket = await memoryPacket;
+        if (!config.featureEnabled) {
+          // The feature was hot-disabled while we awaited the memory query.
+          disableRuntime();
+          return setLastSuppressedDecision(doc, "feature_disabled", null, {}, isDevMode());
+        }
+      }
       const factSensitivity = classifyFactSensitivity({
         candidate: top,
         fragment,
-        feedbackEvents: []
+        feedbackEvents: memoryPacket?.feedbackEvents ?? []
       });
       const candidate = {
         ...top,
@@ -408,18 +496,17 @@ export function startBrowserCognitiveOverlay({
         writeLearningEvent(encounter);
       }
 
-      const learningContext = createEphemeralLearningContext({
-        candidate,
-        factSensitivity,
-        cooldowns: {
-          recentDismissal: hasRecent(
-            recentDismissals,
-            createInteractionKey({ candidate, fragment }),
-            timestamp,
-            config.inference.dismissalCooldownMs
-          )
-        }
-      });
+      const localCooldowns = {
+        recentDismissal: hasRecent(
+          recentDismissals,
+          createInteractionKey({ candidate, fragment }),
+          timestamp,
+          config.inference.dismissalCooldownMs
+        )
+      };
+      const learningContext = memoryPacket
+        ? createMemoryLearningContext({ candidate, factSensitivity, memoryPacket, localCooldowns })
+        : createEphemeralLearningContext({ candidate, factSensitivity, cooldowns: localCooldowns });
       const decision = scoreIntervention({
         fragment,
         behavior: effectiveBehavior,
@@ -994,6 +1081,33 @@ function createUnavailableRegenerationResult(reason, prompt = {}) {
     unavailableReason: reason,
     targetObject: prompt.targetObject ?? null,
     text: ""
+  };
+}
+
+function createMemoryLearningContext({ candidate, factSensitivity, memoryPacket, localCooldowns = {} }) {
+  const packetCooldowns = memoryPacket.cooldowns ?? {};
+  return {
+    canonicalName: candidate.canonicalName,
+    events: [],
+    aliases: memoryPacket.agentSummary?.aliases ?? [],
+    relatedConcepts: (memoryPacket.relatedObjects ?? [])
+      .map((related) => related?.canonicalName)
+      .filter(Boolean),
+    recentTopics: [],
+    derivedSignals: memoryPacket.derivedSignals ?? {},
+    feedbackEvents: memoryPacket.feedbackEvents ?? [],
+    priorExplanations: memoryPacket.priorExplanations ?? [],
+    profileHints: memoryPacket.profileHints ?? {},
+    // Cooldowns merge as a union: the local tracker reacts before the event
+    // batch reaches the gateway, while gateway memory remembers across pages
+    // and reloads. Neither side may clear the other's suppression.
+    cooldowns: {
+      ...packetCooldowns,
+      recentDismissal: Boolean(localCooldowns.recentDismissal || packetCooldowns.recentDismissal)
+    },
+    factSensitivity: factSensitivity.level,
+    sourceVerified: !factSensitivity.requiresSource,
+    retrievalMode: "gateway_memory_packet"
   };
 }
 
