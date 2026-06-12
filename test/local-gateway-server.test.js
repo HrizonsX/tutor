@@ -859,6 +859,62 @@ test("local gateway handler rejects oversized request bodies with 413", async ()
   assert.equal(body.reason, "request_body_too_large");
 });
 
+test("local gateway server aborts the handler signal when the client disconnects mid-stream", async () => {
+  let observedSignal = null;
+  let firstChunkSent;
+  const firstChunk = new Promise((resolve) => { firstChunkSent = resolve; });
+  const handler = async ({ signal }) => {
+    observedSignal = signal;
+    return {
+      status: 200,
+      ok: true,
+      headers: { "content-type": "application/x-ndjson" },
+      body: (async function* () {
+        yield `${JSON.stringify({ type: "session_start", sequence: 0 })}\n`;
+        firstChunkSent();
+        // Wait for the abort instead of producing forever.
+        await new Promise((resolve) => {
+          if (signal?.aborted) return resolve();
+          signal?.addEventListener?.("abort", resolve, { once: true });
+        });
+        yield `${JSON.stringify({ type: "session_cancelled", sequence: 1 })}\n`;
+      })()
+    };
+  };
+  const logs = [];
+  const logger = {
+    info: (message) => logs.push(message),
+    warn: (message) => logs.push(message),
+    error: (message) => logs.push(message)
+  };
+  const server = await startLocalGatewayServer({ port: 0, handler, logger });
+  const address = server.address();
+
+  try {
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${address.port}/explain/stream-session`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+      signal: controller.signal
+    });
+    const reader = response.body.getReader();
+    await firstChunk;
+    await reader.read();
+    controller.abort();
+    const deadline = Date.now() + 2000;
+    while (!observedSignal?.aborted && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    assert.ok(observedSignal, "handler should receive a signal");
+    assert.equal(observedSignal.aborted, true);
+    assert.equal(logs.some((message) => String(message).includes("request_cancelled")), true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("local gateway server stops reading oversized uploads and answers 413", async () => {
   const store = createLocalMemoryStore({ now: () => 12600, autoProcessBacklog: false });
   const handler = createLocalGatewayHandler({ token: "pairing-secret", store, now: () => 12600 });

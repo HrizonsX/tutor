@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { withTimeout } from "./async-control.js";
 import { DEFAULT_CONFIG, mergeConfig } from "./config.js";
 import {
   AgentCapability,
@@ -286,7 +287,9 @@ export function validateAgentExplanationResult(raw, {
   };
 }
 
-export function createBackgroundAgentClient(runtime = globalThis.chrome?.runtime) {
+export function createBackgroundAgentClient(runtime = globalThis.chrome?.runtime, {
+  streamIdleTimeoutMs = DEFAULT_CONFIG.localGateway?.streamIdleTimeoutMs ?? 30000
+} = {}) {
   return {
     async composeShortExplanation(input) {
       return sendRuntimeMessage(runtime, {
@@ -372,13 +375,39 @@ export function createBackgroundAgentClient(runtime = globalThis.chrome?.runtime
       return new Promise((resolve) => {
         let lastResult = null;
         let settled = false;
+        let idleTimer = null;
+        const clearIdleTimer = () => {
+          if (idleTimer) {
+            clearTimeout(idleTimer);
+            idleTimer = null;
+          }
+        };
         const finish = (result) => {
           if (settled) return;
           settled = true;
+          // Clearing here guarantees the promise can never be left pending,
+          // so the caller's in-flight bookkeeping is always released.
+          clearIdleTimer();
           resolve(result ?? lastResult ?? { status: AgentResultStatus.AVAILABLE });
+        };
+        // Idle watchdog: a stalled stream (no events) would otherwise leave
+        // this concept stuck in explain_request_in_flight forever.
+        const armIdleTimer = () => {
+          clearIdleTimer();
+          if (!Number.isFinite(streamIdleTimeoutMs) || streamIdleTimeoutMs <= 0) return;
+          idleTimer = setTimeout(() => {
+            try {
+              port.postMessage?.({ type: "cancel" });
+              port.disconnect?.();
+            } catch {
+              // Port teardown failure must not block settling.
+            }
+            finish(createUnavailableAgentResult({ reason: "runtime_stream_timeout", input }));
+          }, streamIdleTimeoutMs);
         };
         try {
           port.onMessage?.addListener?.((event) => {
+            armIdleTimer();
             onEvent(event);
             if (event?.type === StreamEventType.LANE_FINAL && event.result) {
               lastResult = event.result;
@@ -399,6 +428,7 @@ export function createBackgroundAgentClient(runtime = globalThis.chrome?.runtime
             }, { once: true });
           }
           port.postMessage?.({ input, goal: AgentRequestGoal.MICRO });
+          armIdleTimer();
         } catch (error) {
           finish(createUnavailableAgentResult({
             reason: "runtime_stream_setup_failed",
@@ -1266,12 +1296,3 @@ function normalizeRequestError(error, timeoutReason, fallbackReason) {
   return fallbackReason;
 }
 
-function withTimeout(promise, timeoutMs, reason) {
-  let timer = null;
-  return Promise.race([
-    Promise.resolve(promise),
-    new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(reason)), timeoutMs);
-    })
-  ]).finally(() => clearTimeout(timer));
-}

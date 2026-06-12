@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { withTimeout } from "./async-control.js";
 import { DEFAULT_CONFIG } from "./config.js";
 import {
   AgentCapability,
@@ -344,6 +345,13 @@ export function createLocalGatewayClient({
       }
 
       const read = await readNdjsonEvents(response.body, { onEvent });
+      if (read.eventCount === 0 && read.malformedLineCount > 0) {
+        // Every line failed to parse: the gateway spoke, but not NDJSON.
+        // Reporting "unreachable" here would mislead diagnostics.
+        return unavailable("local_gateway_stream_protocol_error", capability, {
+          malformedLineCount: read.malformedLineCount
+        });
+      }
       logGateway(logger, "info", "request_success", {
         method,
         path,
@@ -392,15 +400,24 @@ export function createLocalGatewayClient({
 }
 
 async function readNdjsonEvents(body, { onEvent = () => {} } = {}) {
-  if (!body) return { eventCount: 0, lastEvent: null };
+  if (!body) return { eventCount: 0, lastEvent: null, malformedLineCount: 0 };
   const decoder = new TextDecoder();
   let buffer = "";
   let eventCount = 0;
   let lastEvent = null;
+  let malformedLineCount = 0;
   const processLine = (line) => {
     const text = line.trim();
     if (!text) return;
-    const event = JSON.parse(text);
+    let event;
+    try {
+      event = JSON.parse(text);
+    } catch {
+      // A single corrupt line must not kill the whole stream; count it so
+      // the caller can distinguish "no events" from "garbage protocol".
+      malformedLineCount += 1;
+      return;
+    }
     eventCount += 1;
     lastEvent = event;
     onEvent(event);
@@ -414,7 +431,7 @@ async function readNdjsonEvents(body, { onEvent = () => {} } = {}) {
   }
   buffer += decoder.decode();
   if (buffer.trim()) processLine(buffer);
-  return { eventCount, lastEvent };
+  return { eventCount, lastEvent, malformedLineCount };
 }
 
 async function* iterateReadableBody(body) {
@@ -580,12 +597,3 @@ function redactUrlForLog(value = "") {
   }
 }
 
-function withTimeout(promise, timeoutMs, reason) {
-  let timer = null;
-  return Promise.race([
-    Promise.resolve(promise),
-    new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(reason)), timeoutMs);
-    })
-  ]).finally(() => clearTimeout(timer));
-}

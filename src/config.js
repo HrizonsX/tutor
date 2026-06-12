@@ -54,6 +54,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     endpoint: "http://127.0.0.1:17321",
     pairingToken: "",
     timeoutMs: 8000,
+    streamIdleTimeoutMs: 30000,
     health: {
       enabled: true,
       cacheTtlMs: 30 * 1000

@@ -133,27 +133,27 @@ export function createOpenAICompatibleAdapter({
   now = () => Date.now(),
   logger = createDefaultProviderLogger()
 } = {}) {
-  async function explain(request) {
-    return callChatCompletion(request, AgentCapability.EXPLAIN);
+  async function explain(request, { signal = null } = {}) {
+    return callChatCompletion(request, AgentCapability.EXPLAIN, { signal });
   }
 
-  async function rewrite(request) {
-    return callChatCompletion(request, AgentCapability.REWRITE);
+  async function rewrite(request, { signal = null } = {}) {
+    return callChatCompletion(request, AgentCapability.REWRITE, { signal });
   }
 
   async function streamExplanation(request = {}, options = {}) {
     return callStreamingChatCompletion(request, options);
   }
 
-  async function suggestRelatedConceptHints(request = {}) {
-    return callRelatedConceptHintsCompletion(request);
+  async function suggestRelatedConceptHints(request = {}, { signal = null } = {}) {
+    return callRelatedConceptHintsCompletion(request, { signal });
   }
 
-  async function proposeRelations(request) {
-    return callRelationProposalCompletion(request);
+  async function proposeRelations(request, { signal = null } = {}) {
+    return callRelationProposalCompletion(request, { signal });
   }
 
-  async function callChatCompletion(request, capabilityKind) {
+  async function callChatCompletion(request, capabilityKind, { signal = null } = {}) {
     if (!provider?.endpoint || !provider?.chatPath || !fetchImpl) {
       logProviderAdapter(logger, "warn", "request_skipped", {
         capabilityKind,
@@ -183,7 +183,8 @@ export function createOpenAICompatibleAdapter({
       const response = await fetchImpl(url, {
         method: "POST",
         headers: buildHeaders(token),
-        body: JSON.stringify(buildChatCompletionBody(request, provider, config))
+        body: JSON.stringify(buildChatCompletionBody(request, provider, config)),
+        ...(signal ? { signal } : {})
       });
       const durationMs = Date.now() - startedAt;
       if (!response?.ok) {
@@ -390,7 +391,7 @@ export function createOpenAICompatibleAdapter({
     }
   }
 
-  async function createEmbedding({ text = "", summary = {}, metadata = {} } = {}) {
+  async function createEmbedding({ text = "", summary = {}, metadata = {} } = {}, { signal = null } = {}) {
     if (!provider?.endpoint || !provider?.embeddingPath || !fetchImpl) {
       logProviderAdapter(logger, "warn", "request_skipped", {
         capabilityKind: AgentCapability.EMBEDDING,
@@ -421,7 +422,8 @@ export function createOpenAICompatibleAdapter({
       const response = await fetchImpl(url, {
         method: "POST",
         headers: buildHeaders(token),
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        ...(signal ? { signal } : {})
       });
       const durationMs = Date.now() - startedAt;
       if (!response?.ok) {
@@ -509,7 +511,7 @@ export function createOpenAICompatibleAdapter({
     }
   }
 
-  async function callRelatedConceptHintsCompletion(request = {}) {
+  async function callRelatedConceptHintsCompletion(request = {}, { signal = null } = {}) {
     const capabilityKind = AgentCapability.EXPLAIN;
     if (!provider?.endpoint || !provider?.chatPath || !fetchImpl) {
       return unavailable("explain_endpoint_unconfigured", capabilityKind, provider);
@@ -522,7 +524,8 @@ export function createOpenAICompatibleAdapter({
       const response = await fetchImpl(url, {
         method: "POST",
         headers: buildHeaders(token),
-        body: JSON.stringify(buildRelatedConceptHintsBody(request, provider, config))
+        body: JSON.stringify(buildRelatedConceptHintsBody(request, provider, config)),
+        ...(signal ? { signal } : {})
       });
       const durationMs = Date.now() - startedAt;
       if (!response?.ok) {
@@ -574,7 +577,7 @@ export function createOpenAICompatibleAdapter({
     }
   }
 
-  async function callRelationProposalCompletion(request = {}) {
+  async function callRelationProposalCompletion(request = {}, { signal = null } = {}) {
     const capabilityKind = AgentCapability.RELATION_PROPOSAL;
     if (!provider?.endpoint || !provider?.chatPath || !fetchImpl) {
       logProviderAdapter(logger, "warn", "request_skipped", {
@@ -605,7 +608,8 @@ export function createOpenAICompatibleAdapter({
       const response = await fetchImpl(url, {
         method: "POST",
         headers: buildHeaders(token),
-        body: JSON.stringify(buildRelationProposalBody(request, provider, config))
+        body: JSON.stringify(buildRelationProposalBody(request, provider, config)),
+        ...(signal ? { signal } : {})
       });
       const durationMs = Date.now() - startedAt;
       if (!response?.ok) {

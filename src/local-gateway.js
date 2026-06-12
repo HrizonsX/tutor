@@ -19,6 +19,7 @@ import {
 } from "./local-memory-store.js";
 import { createMemoryRepositoryFromRuntimeConfig } from "./memory-repository-factory.js";
 import { createProviderAdapterClient } from "./provider-adapters.js";
+import { isTimeoutError, withAbortTimeout } from "./async-control.js";
 import { normalizeRuntimeAdapter, normalizeRuntimeProviderMode } from "./runtime-config.js";
 import { createRuntimeExplainPipeline } from "./runtime-explain-pipeline.js";
 import { timingSafeEqual } from "node:crypto";
@@ -181,14 +182,13 @@ export function createGatewayProviderRuntime({
       return unavailableRuntimeProvider("provider_adapter_unconfigured", AgentCapability.EXPLAIN, provider);
     }
     try {
-      return await withTimeout(
-        adapterClient.streamExplanation(request, options),
-        provider.timeoutMs,
-        "agent_timeout"
+      return await withAbortTimeout(
+        (signal) => adapterClient.streamExplanation(request, { ...options, signal }),
+        { timeoutMs: provider.timeoutMs, reason: "agent_timeout", parentSignal: options.signal ?? null }
       );
     } catch (error) {
       return unavailableRuntimeProvider(
-        error?.message === "agent_timeout" ? "agent_timeout" : "provider_unavailable",
+        isTimeoutError(error, "agent_timeout") ? "agent_timeout" : "provider_unavailable",
         AgentCapability.EXPLAIN,
         provider
       );
@@ -212,14 +212,13 @@ export function createGatewayProviderRuntime({
       return unavailableRuntimeProvider("provider_adapter_unconfigured", AgentCapability.EXPLAIN, provider);
     }
     try {
-      return await withTimeout(
-        adapterClient.suggestRelatedConceptHints(request),
-        provider.timeoutMs,
-        "agent_timeout"
+      return await withAbortTimeout(
+        (signal) => adapterClient.suggestRelatedConceptHints(request, { signal }),
+        { timeoutMs: provider.timeoutMs, reason: "agent_timeout" }
       );
     } catch (error) {
       return unavailableRuntimeProvider(
-        error?.message === "agent_timeout" ? "agent_timeout" : "provider_unavailable",
+        isTimeoutError(error, "agent_timeout") ? "agent_timeout" : "provider_unavailable",
         AgentCapability.EXPLAIN,
         provider
       );
@@ -243,14 +242,13 @@ export function createGatewayProviderRuntime({
       return unavailableRuntimeProvider("provider_adapter_unconfigured", AgentCapability.EMBEDDING, provider, { vector: null });
     }
     try {
-      return await withTimeout(
-        adapterClient.createEmbedding(payload),
-        provider.timeoutMs,
-        "embedding_timeout"
+      return await withAbortTimeout(
+        (signal) => adapterClient.createEmbedding(payload, { signal }),
+        { timeoutMs: provider.timeoutMs, reason: "embedding_timeout" }
       );
     } catch (error) {
       return unavailableRuntimeProvider(
-        error?.message === "embedding_timeout" ? "embedding_timeout" : "provider_unavailable",
+        isTimeoutError(error, "embedding_timeout") ? "embedding_timeout" : "provider_unavailable",
         AgentCapability.EMBEDDING,
         provider,
         { vector: null }
@@ -276,14 +274,13 @@ export function createGatewayProviderRuntime({
       return unavailableRuntimeProvider("provider_adapter_unconfigured", AgentCapability.RELATION_PROPOSAL, provider);
     }
     try {
-      return await withTimeout(
-        adapterClient.proposeRelations(request),
-        provider.timeoutMs,
-        "relation_proposer_timeout"
+      return await withAbortTimeout(
+        (signal) => adapterClient.proposeRelations(request, { signal }),
+        { timeoutMs: provider.timeoutMs, reason: "relation_proposer_timeout" }
       );
     } catch (error) {
       return unavailableRuntimeProvider(
-        error?.message === "relation_proposer_timeout" ? "relation_proposer_timeout" : "provider_unavailable",
+        isTimeoutError(error, "relation_proposer_timeout") ? "relation_proposer_timeout" : "provider_unavailable",
         AgentCapability.RELATION_PROPOSAL,
         provider
       );
@@ -308,10 +305,13 @@ export function createGatewayProviderRuntime({
       return unavailableRuntimeProvider("provider_adapter_unconfigured", capabilityKind, provider);
     }
     try {
-      return await withTimeout(method.call(adapterClient, request), provider.timeoutMs, "agent_timeout");
+      return await withAbortTimeout(
+        (signal) => method.call(adapterClient, request, { signal }),
+        { timeoutMs: provider.timeoutMs, reason: "agent_timeout" }
+      );
     } catch (error) {
       return unavailableRuntimeProvider(
-        error?.message === "agent_timeout" ? "agent_timeout" : "provider_unavailable",
+        isTimeoutError(error, "agent_timeout") ? "agent_timeout" : "provider_unavailable",
         capabilityKind,
         provider
       );
@@ -451,6 +451,7 @@ export function createLocalGatewayHandler({
     if (path === "/explain/stream-session") {
       return jsonLineStreamResponse(explainPipeline.streamSession({
         request: body,
+        signal: request.signal ?? null,
         providerAvailable: Boolean(runtime?.streamExplanation),
         directProviderStream: runtime?.streamExplanation
           ? (requestWithLane, options) => runtime.streamExplanation(requestWithLane, { ...options, lane: StreamLane.DIRECT })
@@ -607,6 +608,22 @@ export async function startLocalGatewayServer({
     const requestUrl = `http://${host}:${port}${req.url}`;
     const method = req.method ?? "GET";
     const path = redactUrlForLog(requestUrl);
+    // End-to-end cancellation: when the browser disconnects mid-response the
+    // abort propagates through the handler into streaming lanes and provider
+    // calls instead of letting them run to completion unobserved.
+    const requestController = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) {
+        requestController.abort();
+        logGatewayServer(logger, "info", "request_cancelled", {
+          method,
+          path,
+          startedAt: startedAtIso,
+          cancelledAt: new Date().toISOString(),
+          durationMs: Date.now() - startedAt
+        });
+      }
+    });
     const chunks = [];
     let receivedBodyBytes = 0;
     let rejectedTooLarge = false;
@@ -643,13 +660,22 @@ export async function startLocalGatewayServer({
           method,
           url: requestUrl,
           headers: req.headers,
-          body
+          body,
+          signal: requestController.signal
         });
         res.writeHead(response.status, response.headers);
         if (isAsyncIterable(response.body)) {
           for await (const chunk of response.body) {
             logStreamChunk(logger, requestUrl, chunk);
-            res.write(typeof chunk === "string" || Buffer.isBuffer(chunk) ? chunk : JSON.stringify(chunk));
+            try {
+              res.write(typeof chunk === "string" || Buffer.isBuffer(chunk) ? chunk : JSON.stringify(chunk));
+            } catch {
+              // The socket went away mid-stream: stop producing instead of
+              // throwing past headers that were already sent.
+              requestController.abort();
+              break;
+            }
+            if (requestController.signal.aborted) break;
           }
           res.end();
         } else {
@@ -665,11 +691,17 @@ export async function startLocalGatewayServer({
         });
         logExplainResult(logger, requestUrl, response);
       } catch (error) {
-        res.writeHead(500, { "content-type": "application/json" });
-        res.end(JSON.stringify({
-          status: AgentResultStatus.UNAVAILABLE,
-          reason: "local_gateway_handler_failed"
-        }));
+        if (!res.headersSent) {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({
+            status: AgentResultStatus.UNAVAILABLE,
+            reason: "local_gateway_handler_failed"
+          }));
+        } else {
+          // Headers already went out (mid-stream failure): destroying the
+          // socket is the only honest signal left.
+          res.destroy();
+        }
         logGatewayServer(logger, "warn", "request_error", {
           method,
           path,
@@ -1262,12 +1294,3 @@ function redactUrlForLog(value = "") {
   }
 }
 
-function withTimeout(promise, timeoutMs, reason) {
-  let timer = null;
-  return Promise.race([
-    Promise.resolve(promise),
-    new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(reason)), timeoutMs);
-    })
-  ]).finally(() => clearTimeout(timer));
-}
