@@ -45,6 +45,21 @@ export function evidenceTextHash(value = "") {
   return value ? hashString(clampText(value, 600)) : null;
 }
 
+// Strip control characters and obvious instruction markers (backticks, chat
+// role tokens) from provider-proposed text before persistence so a crafted
+// page cannot seed executable-looking instructions into recalled memory.
+// Normal CJK punctuation is untouched.
+export function stripUntrustedProposalText(value = "") {
+  return String(value)
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .replace(/`+/g, "")
+    .replace(/<\|[^|]*\|>/g, "")
+    .replace(/^\s*(system|assistant|user|tool)\s*:\s*/gim, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function sanitizeRelationEvidence(evidence = {}, config = DEFAULT_CONFIG) {
   const context = evidence.context ?? {};
   return {
@@ -55,9 +70,9 @@ export function sanitizeRelationEvidence(evidence = {}, config = DEFAULT_CONFIG)
       : [],
     contextHash: evidence.contextHash ?? contextHash(context),
     evidenceTextHash: evidence.evidenceTextHash ?? evidenceTextHash(evidence.evidenceText ?? ""),
-    sourceKind: clampText(evidence.sourceKind ?? "unknown", config.privacy.maxStoredAliasChars),
-    proposerVersion: clampText(evidence.proposerVersion ?? evidence.extractorVersion ?? "", config.privacy.maxStoredAliasChars),
-    confidenceReason: clampText(evidence.confidenceReason ?? evidence.gateReason ?? "", 180)
+    sourceKind: clampText(stripUntrustedProposalText(evidence.sourceKind ?? "unknown"), config.privacy.maxStoredAliasChars),
+    proposerVersion: clampText(stripUntrustedProposalText(evidence.proposerVersion ?? evidence.extractorVersion ?? ""), config.privacy.maxStoredAliasChars),
+    confidenceReason: clampText(stripUntrustedProposalText(evidence.confidenceReason ?? evidence.gateReason ?? ""), 180)
   };
 }
 
@@ -91,13 +106,18 @@ export function buildAnalysisPayload(fragment, candidates = [], config = DEFAULT
 }
 
 export function sanitizeEventContext(context = {}, config = DEFAULT_CONFIG) {
-  const url = safeUrlMetadata(context.url ?? "");
+  // Contexts hashed at the content boundary arrive with pageOrigin /
+  // pagePathHash / titleHash already set; prefer those so the raw URL and
+  // title never need to travel. Computing from context.url/title remains as
+  // defence in depth for callers that still send raw values.
+  const hasPrehashedPage = typeof context.pageOrigin === "string" || typeof context.pagePathHash === "string";
+  const url = hasPrehashedPage ? null : safeUrlMetadata(context.url ?? "");
   return {
     fragmentId: context.fragmentId ?? null,
     fragmentType: context.fragmentType ?? null,
-    pageOrigin: url.origin.slice(0, config.privacy.maxStoredUrlChars),
-    pagePathHash: url.pathHash,
-    titleHash: context.title ? hashString(context.title) : null,
+    pageOrigin: String(context.pageOrigin ?? url?.origin ?? "").slice(0, config.privacy.maxStoredUrlChars),
+    pagePathHash: context.pagePathHash ?? url?.pathHash ?? null,
+    titleHash: context.titleHash ?? (context.title ? hashString(context.title) : null),
     relatedConcepts: Array.isArray(context.relatedConcepts)
       ? context.relatedConcepts.slice(0, 5)
       : []

@@ -14,7 +14,7 @@ import {
 } from "./contracts.js";
 import { normalizeKnowledgeObjectName } from "./concepts.js";
 import { isRelationUsableForOverlay } from "./cognitive-memory.js";
-import { clampText, hashString, sanitizeEventContext } from "./privacy.js";
+import { clampText, hashString, safeUrlMetadata, sanitizeEventContext } from "./privacy.js";
 
 const MEMORY_FIELD_NAMES = new Set([
   "memoryPacket",
@@ -599,18 +599,30 @@ export function normalizeRuntimeRequest(request = {}, { capabilityKind = AgentCa
       factSensitivity: rawTarget.factSensitivity ?? "stable"
     },
     selectedText: clampText(stateless.selectedText ?? observedText, 120),
-    minimalContext: {
-      fragmentId: stateless.minimalContext?.fragmentId ?? stateless.fragment?.id ?? null,
-      fragmentType: stateless.minimalContext?.fragmentType ?? stateless.fragment?.type ?? null,
-      text: clampText(stateless.minimalContext?.text ?? stateless.fragment?.text ?? "", config.privacy.maxContextChars),
-      url: clampText(stateless.minimalContext?.url ?? stateless.url ?? "", config.privacy.maxStoredUrlChars),
-      title: clampText(stateless.minimalContext?.title ?? stateless.title ?? "", 180),
-      language: stateless.minimalContext?.language ?? stateless.language ?? null
-    },
+    minimalContext: normalizeMinimalContextMetadata(stateless, config),
     constraints: {
       ...(stateless.constraints ?? {})
     },
     timestamp
+  };
+}
+
+// Raw page URL and title stop at this normalization boundary: provider
+// requests and diagnostics receive only origin + hashes, even when a gateway
+// caller still sends raw url/title fields.
+function normalizeMinimalContextMetadata(stateless = {}, config) {
+  const provided = stateless.minimalContext ?? {};
+  const rawUrl = provided.url ?? stateless.url ?? "";
+  const rawTitle = provided.title ?? stateless.title ?? "";
+  const urlMetadata = rawUrl ? safeUrlMetadata(rawUrl) : null;
+  return {
+    fragmentId: provided.fragmentId ?? stateless.fragment?.id ?? null,
+    fragmentType: provided.fragmentType ?? stateless.fragment?.type ?? null,
+    text: clampText(provided.text ?? stateless.fragment?.text ?? "", config.privacy.maxContextChars),
+    pageOrigin: String(provided.pageOrigin ?? urlMetadata?.origin ?? "").slice(0, config.privacy.maxStoredUrlChars),
+    pagePathHash: provided.pagePathHash ?? urlMetadata?.pathHash ?? null,
+    titleHash: provided.titleHash ?? (rawTitle ? hashString(rawTitle) : null),
+    language: provided.language ?? stateless.language ?? null
   };
 }
 

@@ -114,8 +114,28 @@ Layered troubleshooting:
 
 The persistent store keeps raw learning events separate from derived summaries.
 Memory summaries include evidence event ids, timestamps, uncertainty, and
-summarizer metadata, and provider requests receive only sanitized learning
-state rather than full page text or unsanitized raw event payloads.
+summarizer metadata.
+
+What leaves the browser, precisely:
+
+- Learning event path: events are hashed at the content boundary before they
+  reach the gateway — contexts carry `pageOrigin`, `pagePathHash`, and
+  `titleHash` instead of the raw URL or page title, and never full page text.
+- Explanation request path: provider requests intentionally include the
+  trimmed current reading fragment (`minimalContext.text`, bounded by
+  `privacy.maxContextChars`) and the user's selected text, because the
+  provider needs them to explain the concept in context. They do not include
+  the raw page URL or title (only origin + hashes), full page text, memory
+  event payloads, or pairing/provider tokens.
+- Page-derived fields are declared untrusted content in every provider system
+  prompt, and provider-proposed relation text is stripped of control
+  characters and instruction markers before persistence.
+
+Concept-naming diagnostics (`bcoLastDecision`, `bcoLastAgentResult`) and the
+page-dispatchable debug/enable channels (`bco:debug-show`, `bco:enable`,
+`data-bco-enabled`) are dev-mode only: with `devMode` off (the default), any
+web page sees at most the coarse `bcoState` marker, never the concepts the
+user is reading.
 
 To route through a real OpenAI-compatible provider from the local gateway, keep
 the extension pointed at the gateway and configure provider settings in the

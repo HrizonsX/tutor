@@ -75,12 +75,12 @@ test("content respects explicit page dataset feature disable at startup", () => 
   assert.equal(doc.documentElement.dataset.bcoReason, "feature_disabled");
 });
 
-test("debug overlay can render while feature gate is disabled", () => {
+test("debug overlay can render in dev mode while feature gate is disabled", () => {
   const doc = fakeDocument();
   const runtime = startBrowserCognitiveOverlay({
     doc,
     win: fakeWindow([]),
-    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: false }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: false, devMode: true }),
     now: () => 1000
   });
 
@@ -95,12 +95,12 @@ test("debug overlay can render while feature gate is disabled", () => {
   assert.match(root.querySelector(".bco-micro").textContent, /overlay UI is rendering correctly/);
 });
 
-test("content can be enabled after initial feature gate disable", () => {
+test("content can be enabled by page events in dev mode after initial feature gate disable", () => {
   const doc = fakeDocument();
   const runtime = startBrowserCognitiveOverlay({
     doc,
     win: fakeWindow([]),
-    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: false }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: false, devMode: true }),
     now: () => 1000
   });
 
@@ -266,7 +266,7 @@ test("invalid finalized selection stays silent and exposes diagnostic reason", (
       timers,
       getSelectionText: () => selectedText
     }),
-    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true, devMode: true }),
     memoryClient: { writeMemoryEvent: async (payload) => writes.push(payload) },
     now: () => 1000
   });
@@ -459,7 +459,7 @@ test("overlay already visible records suppression without marking agent unavaila
   const runtime = startBrowserCognitiveOverlay({
     doc,
     win: fakeWindow([], { getSelectionText: () => "KL divergence" }),
-    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true, devMode: true }),
     agentClient: {
       composeShortExplanation: async (input) => ({
         status: AgentResultStatus.AVAILABLE,
@@ -638,7 +638,7 @@ test("content suppresses immediate re-prompt after dismissal", async () => {
   const runtime = startBrowserCognitiveOverlay({
     doc,
     win: fakeWindow([], { getSelectionText: () => "KL divergence" }),
-    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true, devMode: true }),
     agentClient: {
       composeShortExplanation: async (input) => {
         explanations.push(input);
@@ -696,7 +696,7 @@ test("content retries unavailable explanation after explicit reselection", async
   const runtime = startBrowserCognitiveOverlay({
     doc,
     win: fakeWindow([], { getSelectionText: () => "KL divergence" }),
-    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true, devMode: true }),
     agentClient: {
       composeShortExplanation: async (input) => {
         explanations.push(input);
@@ -877,7 +877,7 @@ test("content suppresses stale in-flight explanation after config changes and re
       storageChangeListeners,
       getSelectionText: () => "KL divergence"
     }),
-    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true, devMode: true }),
     agentClient: {
       composeShortExplanation: async (input) => {
         resolveComposeStarted();
@@ -1055,6 +1055,106 @@ test("content suppresses stale in-flight regeneration after config changes", asy
   const status = doc.body.querySelector(".bco-status");
   assert.equal(!status || status.hidden, true);
   assert.equal(writes.filter((write) => write.event.type === MemoryEventType.REQUESTED_REGENERATION).length, 1);
+  runtime.stop();
+});
+
+test("production mode keeps concept diagnostics out of the page dataset", async () => {
+  const doc = fakeDocument();
+  const runtime = startBrowserCognitiveOverlay({
+    doc,
+    win: fakeWindow([], { getSelectionText: () => "KL divergence" }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    agentClient: {
+      composeShortExplanation: async (input) => ({
+        status: AgentResultStatus.AVAILABLE,
+        target: input.target,
+        microExplanation: "KL divergence keeps policy updates from moving too far.",
+        versionMetadata: { id: "ver_kl_prod", source: "external_agent" }
+      })
+    },
+    memoryClient: { writeMemoryEvent: async () => {} },
+    now: () => 1000
+  });
+  runtime.contextTracker.update = () => ({
+    id: "p-kl",
+    type: "paragraph",
+    text: "PPO clipping and KL divergence limit how far a policy update can move."
+  });
+  runtime.behaviorTracker.observeFragment = () => ({});
+  runtime.behaviorTracker.getSummary = () => ({
+    selectedPreciseTerm: true,
+    selectionText: "KL divergence"
+  });
+
+  await runtime.evaluate();
+
+  assert.equal(doc.body.querySelector("#browser-cognitive-overlay").hidden, false);
+  assert.equal(doc.documentElement.dataset.bcoLastDecision, undefined);
+  assert.equal(doc.documentElement.dataset.bcoLastAgentResult, undefined);
+  assert.equal(doc.documentElement.dataset.bcoState, "started");
+  runtime.stop();
+});
+
+test("production mode ignores page-dispatched debug and enable events", () => {
+  const doc = fakeDocument();
+  const runtime = startBrowserCognitiveOverlay({
+    doc,
+    win: fakeWindow([]),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: false }),
+    now: () => 1000
+  });
+
+  assert.equal(runtime.started, false);
+
+  doc.dispatchEvent({ type: "bco:debug-show" });
+  assert.equal(doc.body.querySelector("#browser-cognitive-overlay"), null);
+
+  doc.documentElement.dataset.bcoEnabled = "true";
+  doc.dispatchEvent({ type: "bco:enable" });
+  assert.equal(doc.documentElement.dataset.bcoState, "disabled");
+});
+
+test("learning events carry hashed page metadata instead of raw URL and title", async () => {
+  const doc = fakeDocument();
+  const writes = [];
+  const runtime = startBrowserCognitiveOverlay({
+    doc,
+    win: fakeWindow([], { getSelectionText: () => "KL divergence" }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    agentClient: {
+      composeShortExplanation: async (input) => ({
+        status: AgentResultStatus.AVAILABLE,
+        target: input.target,
+        microExplanation: "KL divergence keeps policy updates from moving too far.",
+        versionMetadata: { id: "ver_kl_meta", source: "external_agent" }
+      })
+    },
+    memoryClient: { writeMemoryEvent: async (payload) => writes.push(payload) },
+    now: () => 1000
+  });
+  runtime.contextTracker.update = () => ({
+    id: "p-kl",
+    type: "paragraph",
+    text: "PPO clipping and KL divergence limit how far a policy update can move."
+  });
+  runtime.behaviorTracker.observeFragment = () => ({});
+  runtime.behaviorTracker.getSummary = () => ({
+    selectedPreciseTerm: true,
+    selectionText: "KL divergence"
+  });
+
+  await runtime.evaluate();
+
+  const contexts = writes.map((write) => write.event.context).filter((context) => context?.fragmentId);
+  assert.ok(contexts.length >= 1);
+  for (const context of contexts) {
+    assert.equal(context.url, undefined);
+    assert.equal(context.title, undefined);
+    assert.equal(context.pageOrigin, "https://example.test");
+    assert.ok(context.pagePathHash);
+    assert.ok(context.titleHash);
+  }
+  assert.doesNotMatch(JSON.stringify(writes), /\/article|"Article"/);
   runtime.stop();
 });
 

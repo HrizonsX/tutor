@@ -6,7 +6,7 @@ import { extractConceptCandidates, normalizeKnowledgeObjectName, validateSelecte
 import { composeShortExplanation, createComposerInput, regenerateExplanation } from "./composer.js";
 import { classifyFactSensitivity } from "./fact-sensitivity.js";
 import { scoreIntervention } from "./inference.js";
-import { buildAnalysisPayload } from "./privacy.js";
+import { buildAnalysisPayload, hashString, safeUrlMetadata } from "./privacy.js";
 import { CognitiveOverlay } from "./overlay.js";
 import { AgentResultStatus, MemoryEventType } from "./contracts.js";
 import { createBackgroundAgentClient, validateAgentExplanationResult } from "./agent-service.js";
@@ -26,6 +26,21 @@ export function startBrowserCognitiveOverlay({
 } = {}) {
   let eventSequence = 0;
   let runtimeConfigVersion = 0;
+  // Diagnostics that name concepts are written to the page-readable dataset
+  // only in dev mode: under <all_urls> any site could otherwise harvest the
+  // user's reading-concept stream. Read at call time so hot config updates
+  // apply.
+  const isDevMode = () => config.devMode === true;
+  // Learning events leave the content boundary with hashed URL/title metadata
+  // instead of raw location data.
+  const buildPageContext = () => {
+    const urlMetadata = safeUrlMetadata(win?.location?.href ?? "");
+    return {
+      pageOrigin: urlMetadata.origin,
+      pagePathHash: urlMetadata.pathHash,
+      titleHash: doc?.title ? hashString(doc.title) : null
+    };
+  };
   const recentDismissals = new Map();
   const writeLearningEvent = (event) => {
     void memoryClient?.writeMemoryEvent?.({ event, repository: "learning" });
@@ -127,7 +142,7 @@ export function startBrowserCognitiveOverlay({
       };
     }
   }) : null;
-  installDebugOverlay({ doc, win, overlay, now });
+  installDebugOverlay({ doc, win, overlay, now, devMode: isDevMode() });
 
   if (!config.featureEnabled || !doc?.body) {
     setRuntimeState(doc, "disabled", "feature_disabled");
@@ -140,18 +155,23 @@ export function startBrowserCognitiveOverlay({
         startBrowserCognitiveOverlay({ win, doc, config, now, agentClient, memoryClient });
       }
     };
-    installRuntimeEnable({
-      doc,
-      win,
-      start: () => startBrowserCognitiveOverlay({
-        win,
+    // Page-driven enable (bco:enable / data-bco-enabled) is a dev-only
+    // channel; the production enable path is the extension's own storage
+    // config update below.
+    if (isDevMode()) {
+      installRuntimeEnable({
         doc,
-        config: loadRuntimeConfig(win, doc),
-        now,
-        agentClient,
-        memoryClient
-      })
-    });
+        win,
+        start: () => startBrowserCognitiveOverlay({
+          win,
+          doc,
+          config: loadRuntimeConfig(win, doc),
+          now,
+          agentClient,
+          memoryClient
+        })
+      });
+    }
     readInitialBrowserConfig({ win, onLoad: startFromConfig });
     installBrowserConfigUpdateListener({ win, onUpdate: startFromConfig });
     return { started: false, reason: "feature_disabled", debugOverlay: overlay };
@@ -261,7 +281,7 @@ export function startBrowserCognitiveOverlay({
       clearSelectionSideEffects();
       return setLastSuppressedDecision(doc, validation.reason, candidate.fragment, {
         selectionValidation: validation
-      });
+      }, isDevMode());
     }
 
     scheduleSelectedTermEvent(candidate.fragment, 0);
@@ -312,10 +332,10 @@ export function startBrowserCognitiveOverlay({
   const evaluate = async () => {
     if (!config.featureEnabled) {
       disableRuntime();
-      return setLastSuppressedDecision(doc, "feature_disabled");
+      return setLastSuppressedDecision(doc, "feature_disabled", null, {}, isDevMode());
     }
     if (evaluating) {
-      return setLastSuppressedDecision(doc, "evaluate_in_flight");
+      return setLastSuppressedDecision(doc, "evaluate_in_flight", null, {}, isDevMode());
     }
     evaluating = true;
 
@@ -323,7 +343,7 @@ export function startBrowserCognitiveOverlay({
       const timestamp = now();
       const fragment = contextTracker.update();
       if (!fragment) {
-        return setLastSuppressedDecision(doc, "no_readable_fragment");
+        return setLastSuppressedDecision(doc, "no_readable_fragment", null, {}, isDevMode());
       }
 
       const behavior = behaviorTracker.observeFragment(fragment, timestamp);
@@ -353,7 +373,7 @@ export function startBrowserCognitiveOverlay({
       });
       const top = candidates[0];
       if (!top) {
-        return setLastSuppressedDecision(doc, "no_candidate", fragment);
+        return setLastSuppressedDecision(doc, "no_candidate", fragment, {}, isDevMode());
       }
 
       const factSensitivity = classifyFactSensitivity({
@@ -372,7 +392,7 @@ export function startBrowserCognitiveOverlay({
           concept: candidate.canonicalName,
           observedAlias: candidate.observedText,
           knowledgeType: candidate.knowledgeType,
-          context: { fragmentId: fragment.id, fragmentType: fragment.type, url: win.location?.href, title: doc.title },
+          context: { fragmentId: fragment.id, fragmentType: fragment.type, ...buildPageContext() },
           relatedConcepts: candidate.relatedConcepts,
           timestamp
         });
@@ -401,18 +421,17 @@ export function startBrowserCognitiveOverlay({
       if (effectiveBehavior.selectionValidation) {
         decision.selectionValidation = effectiveBehavior.selectionValidation;
       }
-      setLastDecision(doc, decision);
+      setLastDecision(doc, decision, isDevMode());
 
       if (!decision.shouldShow || !decision.candidate) return decision;
       if (isSameOverlayPromptVisible(overlay, decision.candidate)) {
-        return suppressDecision(decision, "overlay_already_visible", doc);
+        return suppressDecision(decision, "overlay_already_visible", doc, {}, isDevMode());
       }
 
       const context = {
         fragmentId: fragment.id,
         fragmentType: fragment.type,
-        url: win.location?.href ?? "",
-        title: doc.title,
+        ...buildPageContext(),
         relatedConcepts: learningContext.relatedConcepts,
         knowledgeType: candidate.knowledgeType,
         factSensitivity: factSensitivity.level
@@ -429,10 +448,10 @@ export function startBrowserCognitiveOverlay({
         return suppressDecision(decision, "recent_agent_unavailable_retry_suppressed", doc, {
           target: decision.candidate,
           retryAt
-        });
+        }, isDevMode());
       }
       if (pendingExplanations.has(explanationKey)) {
-        return suppressDecision(decision, "explain_request_in_flight", doc, { target: decision.candidate });
+        return suppressDecision(decision, "explain_request_in_flight", doc, { target: decision.candidate }, isDevMode());
       }
 
       pendingExplanations.add(explanationKey);
@@ -484,11 +503,11 @@ export function startBrowserCognitiveOverlay({
           });
       if (requestConfigVersion !== runtimeConfigVersion) {
         hideOverlayQuietly(overlay);
-        return suppressDecision(decision, "runtime_config_changed", doc, { target: decision.candidate });
+        return suppressDecision(decision, "runtime_config_changed", doc, { target: decision.candidate }, isDevMode());
       }
       if (!config.featureEnabled) {
         hideOverlayQuietly(overlay);
-        return suppressDecision(decision, "feature_disabled", doc, { target: decision.candidate });
+        return suppressDecision(decision, "feature_disabled", doc, { target: decision.candidate }, isDevMode());
       }
       if (explanationVersion.status !== AgentResultStatus.AVAILABLE || !explanationVersion.text) {
         const failedAt = now();
@@ -496,7 +515,7 @@ export function startBrowserCognitiveOverlay({
           failedAt,
           retryAt: failedAt + failedExplainCooldownMs
         });
-        setLastAgentResult(doc, explanationVersion);
+        setLastAgentResult(doc, explanationVersion, isDevMode());
         return {
           ...decision,
           shouldShow: false,
@@ -514,7 +533,7 @@ export function startBrowserCognitiveOverlay({
         ...currentVersion,
         target: currentVersion.target || candidate.canonicalName,
         targetObject: currentVersion.targetObject?.canonicalName ? currentVersion.targetObject : candidate
-      });
+      }, isDevMode());
       context.explanationVersionId = currentVersion.id;
       context.explanationStyle = currentVersion.style;
       const prompt = {
@@ -585,7 +604,7 @@ export function startBrowserCognitiveOverlay({
         type: MemoryEventType.USER_SELECTED_TERM,
         concept,
         observedAlias: stableSelection.text,
-        context: { fragmentId: stableFragment.id, fragmentType: stableFragment.type, url: win.location?.href, title: doc.title },
+        context: { fragmentId: stableFragment.id, fragmentType: stableFragment.type, ...buildPageContext() },
         timestamp
       });
       writeLearningEvent(event);
@@ -632,7 +651,7 @@ export function startBrowserCognitiveOverlay({
   doc.addEventListener?.("visibilitychange", () => {
     if (doc.visibilityState === "hidden") cancelSelectionGesture();
   });
-  installDebugOverlay({ doc, win, overlay, now });
+  installDebugOverlay({ doc, win, overlay, now, devMode: isDevMode() });
   win.addEventListener("scroll", scheduleEvaluate, { passive: true });
   win.addEventListener("resize", scheduleEvaluate, { passive: true });
   win.addEventListener("pointermove", () => behaviorTracker.recordActivity(now()), { passive: true });
@@ -714,7 +733,10 @@ async function runStreamingExplanation({
   });
 }
 
-function installDebugOverlay({ doc, win, overlay, now = () => Date.now() } = {}) {
+function installDebugOverlay({ doc, win, overlay, now = () => Date.now(), devMode = false } = {}) {
+  // Page-dispatchable debug events are a dev-only channel: in production any
+  // site could otherwise force the overlay open or detect the extension.
+  if (devMode !== true) return;
   if (!doc?.addEventListener || !overlay) return;
   if (doc.documentElement?.dataset?.bcoDebugListener === "registered") return;
   doc.documentElement.dataset.bcoDebugListener = "registered";
@@ -792,7 +814,10 @@ function setRuntimeState(doc, state, reason = "") {
   else delete root.dataset.bcoReason;
 }
 
-function setLastDecision(doc, decision) {
+function setLastDecision(doc, decision, devMode = false) {
+  // Decision diagnostics name the concepts the user is reading; never write
+  // them to the page-readable dataset outside dev mode.
+  if (devMode !== true) return;
   const root = doc?.documentElement;
   if (!root?.dataset || !decision) return;
   root.dataset.bcoLastDecision = JSON.stringify({
@@ -806,7 +831,7 @@ function setLastDecision(doc, decision) {
   });
 }
 
-function setLastSuppressedDecision(doc, reason, fragment = null, extra = {}) {
+function setLastSuppressedDecision(doc, reason, fragment = null, extra = {}, devMode = false) {
   const decision = {
     shouldShow: false,
     priority: 0,
@@ -816,11 +841,12 @@ function setLastSuppressedDecision(doc, reason, fragment = null, extra = {}) {
     fragmentId: fragment?.id ?? null,
     selectionValidation: summarizeSelectionValidation(extra.selectionValidation)
   };
-  setLastDecision(doc, decision);
+  setLastDecision(doc, decision, devMode);
   return decision;
 }
 
-function setLastAgentResult(doc, result) {
+function setLastAgentResult(doc, result, devMode = false) {
+  if (devMode !== true) return;
   const root = doc?.documentElement;
   if (!root?.dataset || !result) return;
   root.dataset.bcoLastAgentResult = JSON.stringify({
@@ -891,7 +917,7 @@ function hideOverlayQuietly(overlay) {
   overlay.currentPrompt = null;
 }
 
-function suppressDecision(decision, reason, doc, extra = {}) {
+function suppressDecision(decision, reason, doc, extra = {}, devMode = false) {
   const result = {
     status: AgentResultStatus.UNAVAILABLE,
     reason,
@@ -906,9 +932,9 @@ function suppressDecision(decision, reason, doc, extra = {}) {
     agentStatus: result.status,
     agentReason: reason
   };
-  setLastDecision(doc, suppressedDecision);
+  setLastDecision(doc, suppressedDecision, devMode);
   if (reason !== "overlay_already_visible") {
-    setLastAgentResult(doc, result);
+    setLastAgentResult(doc, result, devMode);
   }
   return suppressedDecision;
 }

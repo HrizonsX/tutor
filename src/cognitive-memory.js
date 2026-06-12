@@ -2,7 +2,7 @@
 import { DEFAULT_CONFIG } from "./config.js";
 import { DerivedSignal, MemoryEventType } from "./contracts.js";
 import { normalizeKnowledgeObjectName } from "./concepts.js";
-import { clampSourceDate, clampSourceIds, clampText, hashString, sanitizeRelationEvidence } from "./privacy.js";
+import { clampSourceDate, clampSourceIds, clampText, hashString, sanitizeRelationEvidence, stripUntrustedProposalText } from "./privacy.js";
 
 export const COGNITIVE_MEMORY_VERSION = "cognitive-memory.v1";
 export const DAILY_SUMMARY_VERSION = "daily-memory-summary.v1";
@@ -326,9 +326,9 @@ export function normalizeRelationProposalCandidate(value = {}, { targetConcept =
     basis: value.basis ?? RelationBasis.DAILY_SUMMARY_INFERENCE,
     usableForOverlay: value.usableForOverlay !== false,
     overlayDisabledExplicitly: value.overlayDisabledExplicitly === true || value.usableForOverlay === false,
-    reasonCode: clampText(value.reasonCode ?? value.reason ?? "", 160),
-    sourceKind: clampText(value.sourceKind ?? "relation_proposer", config.privacy.maxStoredAliasChars),
-    proposerVersion: clampText(value.proposerVersion ?? RELATION_PROPOSER_VERSION, config.privacy.maxStoredAliasChars),
+    reasonCode: clampText(stripUntrustedProposalText(value.reasonCode ?? value.reason ?? ""), 160),
+    sourceKind: clampText(stripUntrustedProposalText(value.sourceKind ?? "relation_proposer"), config.privacy.maxStoredAliasChars),
+    proposerVersion: clampText(stripUntrustedProposalText(value.proposerVersion ?? RELATION_PROPOSER_VERSION), config.privacy.maxStoredAliasChars),
     sourceEventIds: clampSourceIds(value.sourceEventIds ?? value.evidenceEventIds, 12),
     sourceExplanationVersionIds: clampSourceIds(value.sourceExplanationVersionIds, 12),
     contextHash: value.contextHash ?? null,
