@@ -1,0 +1,17 @@
+# Local infrastructure for layered-memory integration tests.
+# Start with: npm run db:up    Stop with: npm run db:down
+# Then export the BCO_TEST_* variables from .env.example and run
+# npm run test:integration.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: bco
+      POSTGRES_PASSWORD: bco
+      POSTGRES_DB: bco
+    ports:
+      - "5432:5432"
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"

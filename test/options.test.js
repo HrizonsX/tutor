@@ -13,15 +13,17 @@ import {
 } from "../src/options.js";
 import { AgentCapability, AgentResultStatus, ProviderKind, ProviderRole } from "../src/contracts.js";
 
-test("options view model mirrors the diagnostic panel defaults", () => {
+test("options view model renders an explicit empty state before diagnostics arrive", () => {
   const model = buildOptionsViewModel();
 
-  assert.equal(model.provider.text, "本地 (llama-3-8b)");
-  assert.equal(model.connection.text, "稳定 (12ms 延迟)");
+  assert.equal(model.provider.text, "未配置");
+  assert.equal(model.connection.text, "未连接");
   assert.equal(model.capabilities.map((row) => row.label).join(","), "DOM 读取,DOM 修改,网络拦截,IndexedDB 访问");
-  assert.equal(model.memory.storage.text, "12.4 MB / 50 MB");
-  assert.equal(model.decisions[0].id, "#DEC-092");
-  assert.equal(model.snapshot.overlay_active, true);
+  assert.equal(model.memory.storage.text, "—");
+  assert.deepEqual(model.decisions, []);
+  assert.equal(model.snapshot.status, "no_diagnostics_yet");
+  // No fabricated telemetry anywhere in the empty-state model.
+  assert.doesNotMatch(JSON.stringify(model), /llama-3-8b|12ms|12\.4 MB|#DEC-09/);
 });
 
 test("options view model maps live diagnostics and gateway health", () => {
@@ -111,7 +113,9 @@ test("options view model exposes layered memory component status", () => {
 
 test("options storage formatting is bounded and readable", () => {
   assert.equal(formatBytes(1024 * 1024), "1.0 MB");
-  assert.deepEqual(formatStorageEstimate({ usage: 5, quota: 0 }), { text: "12.4 MB / 50 MB", ratio: 24.8 });
+  // Degraded input (zero quota) renders an explicit em dash, never an
+  // invented usage figure.
+  assert.deepEqual(formatStorageEstimate({ usage: 5, quota: 0 }), { text: "—", ratio: 0 });
   assert.equal(formatStorageEstimate({ usage: 150, quota: 100 }).ratio, 100);
 });
 

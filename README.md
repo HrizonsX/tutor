@@ -99,6 +99,27 @@ Milvus/Zilliz, Neo4j, Kafka, and Debezium are intentionally deferred. The first
 projection path is a Postgres outbox plus polling worker boundary; CDC and graph
 projection can be added after the layered repository and recall contract settle.
 
+#### Layered integration tests
+
+Unit tests use deterministic in-memory fakes and never need live
+infrastructure. To run the optional live integration tests against real
+Postgres and Redis, start the bundled containers and export the `BCO_TEST_*`
+variables (distinct from the runtime `BCO_GATEWAY_*` variables; see
+`.env.example`):
+
+```powershell
+npm run db:up
+$env:BCO_TEST_POSTGRES_URL = "postgres://bco:bco@127.0.0.1:5432/bco"
+$env:BCO_TEST_REDIS_URL = "redis://127.0.0.1:6379/0"
+npm run test:integration
+npm run db:down
+```
+
+The round-trip test writes an event through one repository instance and
+asserts a brand-new instance over the same Postgres hydrates and recalls it.
+CI runs this job on pushes to `main` only, so pull requests are not blocked
+by infrastructure.
+
 Layered troubleshooting:
 
 - `layered_postgres_unconfigured`: set `BCO_GATEWAY_POSTGRES_URL`, or switch

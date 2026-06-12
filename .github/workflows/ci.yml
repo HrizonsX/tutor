@@ -32,12 +32,50 @@ jobs:
       - run: npm run typecheck
 
   openspec-stale-check:
-    # Report-only for now: four known fully-completed changes are pending
-    # archive. Switch to `--strict` once they are archived.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22.x"
-      - run: node scripts/check-openspec-archived.js
+      - run: node scripts/check-openspec-archived.js --strict
+
+  integration:
+    # Live layered-memory round trip against real Postgres and Redis.
+    # Runs only on pushes to main so PRs are not blocked by infrastructure.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bco
+          POSTGRES_PASSWORD: bco
+          POSTGRES_DB: bco
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bco"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BCO_TEST_POSTGRES_URL: postgres://bco:bco@127.0.0.1:5432/bco
+      BCO_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: npm
+      - run: npm ci
+      - run: npm run test:integration

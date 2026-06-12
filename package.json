@@ -11,8 +11,11 @@
     "gateway:dev": "node scripts/local-gateway-dev.js",
     "gateway:stub": "node scripts/local-gateway-dev.js --stub-explain",
     "smoke:pre-recall": "node scripts/pre-recall-browser-smoke-server.js",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
     "test": "node --test",
     "test:ci": "node --test",
+    "test:integration": "node --test test/layered-memory-integration.test.js",
     "typecheck": "tsc -p tsconfig.json",
     "check": "npm run typecheck && npm run test:ci"
   },

@@ -7,11 +7,10 @@ const hasLayeredIntegrationEnv = Boolean(
   process.env.BCO_TEST_POSTGRES_URL &&
   process.env.BCO_TEST_REDIS_URL
 );
+const skipReason = "Set BCO_TEST_POSTGRES_URL and BCO_TEST_REDIS_URL to run live layered integration (npm run db:up; see .env.example).";
 
-test("optional layered repository integration uses configured Postgres and Redis", {
-  skip: hasLayeredIntegrationEnv ? false : "Set BCO_TEST_POSTGRES_URL and BCO_TEST_REDIS_URL to run live layered integration."
-}, async () => {
-  const repository = createMemoryRepositoryFromRuntimeConfig({
+function createIntegrationRepository() {
+  return createMemoryRepositoryFromRuntimeConfig({
     config: createGatewayRuntimeConfig({
       providerConfig: {
         memory: {
@@ -22,6 +21,12 @@ test("optional layered repository integration uses configured Postgres and Redis
       }
     })
   });
+}
+
+test("optional layered repository integration uses configured Postgres and Redis", {
+  skip: hasLayeredIntegrationEnv ? false : skipReason
+}, async () => {
+  const repository = createIntegrationRepository();
   await repository.ready;
   const health = repository.getHealth();
 
@@ -30,4 +35,36 @@ test("optional layered repository integration uses configured Postgres and Redis
   assert.equal(health.layered.postgres.status, "available");
   assert.equal(health.layered.redis.status, "available");
   await repository.close();
+});
+
+test("layered round-trip: a fresh repository recalls events written by a previous one", {
+  skip: hasLayeredIntegrationEnv ? false : skipReason
+}, async () => {
+  const concept = `IntegrationConcept-${Date.now()}`;
+  const eventId = `evt_integration_${Date.now()}`;
+  const writer = createIntegrationRepository();
+  await writer.ready;
+  const stored = await writer.writeEvent({
+    event: {
+      id: eventId,
+      type: "knowledge_encountered",
+      canonicalName: concept,
+      observedAlias: concept,
+      timestamp: Date.now()
+    }
+  });
+  await writer.close();
+
+  // A brand-new repository over the same Postgres must hydrate and recall
+  // (long-term memory SHALL remain queryable from Postgres).
+  const reader = createIntegrationRepository();
+  await reader.ready;
+  const packet = reader.queryMemory({ canonicalName: concept, timestamp: Date.now() });
+  const health = reader.getHealth();
+  await reader.close();
+
+  assert.equal(stored.id, eventId);
+  assert.equal(packet.status, "available");
+  assert.ok(packet.summaryEvidenceEventIds.includes(eventId));
+  assert.equal(health.layered.hydration.hydrated, true);
 });

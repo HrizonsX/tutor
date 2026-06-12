@@ -10,47 +10,12 @@ import { BROWSER_CONFIG_STORAGE_KEY, DEFAULT_CONFIG, mergeConfig } from "./confi
 
 export { BROWSER_CONFIG_STORAGE_KEY };
 
-const SAMPLE_RUNTIME_SNAPSHOT = Object.freeze({
-  overlay_active: true,
-  current_context: {
-    url: "https://dashboard.internal.corp/analytics",
-    extracted_entities: 14,
-    inferred_intent: "data_review"
-  },
-  local_model: {
-    status: "loaded",
-    vram_usage: "4.2GB",
-    temperature: 0.2
-  },
-  event_queue_size: 0
+// Honest empty state: before any diagnostics or health data arrives the
+// dashboard says so explicitly instead of rendering fabricated telemetry.
+const EMPTY_RUNTIME_SNAPSHOT = Object.freeze({
+  status: "no_diagnostics_yet",
+  note: "尚未收到后台诊断数据。"
 });
-
-const SAMPLE_DECISION_ROWS = Object.freeze([
-  {
-    id: "#DEC-092",
-    timestamp: "14:02:11.405",
-    trigger: "置信度 > 0.85",
-    action: "高亮 DOM 节点",
-    latency: "42ms",
-    actionTone: "neutral"
-  },
-  {
-    id: "#DEC-091",
-    timestamp: "14:01:45.112",
-    trigger: "语义匹配 (高)",
-    action: "注入摘要徽章",
-    latency: "115ms",
-    actionTone: "neutral"
-  },
-  {
-    id: "#DEC-090",
-    timestamp: "13:58:22.001",
-    trigger: "上下文歧义",
-    action: "终止 (无动作)",
-    latency: "18ms",
-    actionTone: "danger"
-  }
-]);
 
 const CAPABILITY_ROWS = Object.freeze([
   { key: "domRead", label: "DOM 读取", text: "可用", tone: "ok" },
@@ -71,20 +36,23 @@ export function buildOptionsViewModel({
   indexedDbAvailable = true,
   now = () => Date.now()
 } = {}) {
-  const sampleMode = !diagnostics && !health;
+  // Explicit empty state, not sample data: a privacy product must never show
+  // invented provider names, latencies, or storage numbers as if they were
+  // real telemetry.
+  const emptyState = !diagnostics && !health;
   const providerRole = diagnostics?.providerRoles?.[ProviderRole.EXPLAIN]
     ?? health?.providerRoles?.[ProviderRole.EXPLAIN]
     ?? {};
   const providerHealth = diagnostics?.providerHealth ?? health ?? {};
   const providerMode = providerRole.mode ?? providerHealth.mode ?? diagnostics?.providerMode ?? ProviderKind.LOCAL;
-  const providerSummary = sampleMode
-    ? "本地 (llama-3-8b)"
+  const providerSummary = emptyState
+    ? "未配置"
     : formatProviderSummary(providerMode, providerRole.modelName || providerHealth.modelName);
   const healthStatus = providerHealth.status ?? health?.status ?? AgentResultStatus.UNAVAILABLE;
   const connectionAvailable = isAvailable(healthStatus);
-  const connectionTone = sampleMode || connectionAvailable ? "steady" : "danger";
-  const connectionSummary = sampleMode
-    ? "稳定 (12ms 延迟)"
+  const connectionTone = !emptyState && connectionAvailable ? "steady" : "danger";
+  const connectionSummary = emptyState
+    ? "未连接"
     : connectionAvailable
     ? `稳定 (${Number.isFinite(latencyMs) ? Math.max(0, Math.round(latencyMs)) : 12}ms 延迟)`
     : formatUnavailableReason(providerHealth.reason ?? health?.reason ?? "local_gateway_unreachable");
@@ -94,17 +62,17 @@ export function buildOptionsViewModel({
     ?? diagnostics?.memoryRepositoryStatus?.memoryRepository
     ?? diagnostics?.memoryRepositoryStatus
     ?? null;
-  const memoryAvailable = sampleMode || memoryRepository?.status === "available" || isAvailable(memoryRepository?.status);
+  const memoryAvailable = !emptyState && (memoryRepository?.status === "available" || isAvailable(memoryRepository?.status));
   const summarizer = memoryRepository?.summarizer ?? {};
   const cognitiveMemory = memoryRepository?.cognitiveMemory ?? {};
-  const storage = formatStorageEstimate(storageEstimate, sampleMode);
-  const vectorCount = sampleMode
-    ? 4092
-    : cognitiveMemory.conceptProjectionCount
-      ?? cognitiveMemory.activeRelationCount
-      ?? summarizer.processedEventCount
-      ?? 0;
-  const summarizerState = deriveSummarizerState(summarizer, sampleMode);
+  const storage = formatStorageEstimate(storageEstimate);
+  const vectorCount = cognitiveMemory.conceptProjectionCount
+    ?? cognitiveMemory.activeRelationCount
+    ?? summarizer.processedEventCount
+    ?? 0;
+  const summarizerState = emptyState
+    ? { text: "—", tone: "ok", dotTone: "muted" }
+    : deriveSummarizerState(summarizer);
 
   return {
     provider: {
@@ -127,11 +95,11 @@ export function buildOptionsViewModel({
     }),
     memory: {
       backend: {
-        text: memoryRepository?.storeMode ?? memoryRepository?.mode ?? "unknown",
+        text: memoryRepository?.storeMode ?? memoryRepository?.mode ?? (emptyState ? "—" : "unknown"),
         tone: memoryAvailable ? "ok" : "danger"
       },
       architecture: {
-        text: memoryAvailable ? "可用" : "降级",
+        text: emptyState ? "—" : memoryAvailable ? "可用" : "降级",
         tone: memoryAvailable ? "ok" : "danger"
       },
       storage,
@@ -148,8 +116,8 @@ export function buildOptionsViewModel({
       } : null
     },
     decisions: buildDecisionRows(diagnostics, now),
-    snapshot: sampleMode
-      ? SAMPLE_RUNTIME_SNAPSHOT
+    snapshot: emptyState
+      ? EMPTY_RUNTIME_SNAPSHOT
       : {
           diagnostics,
           health
@@ -289,11 +257,13 @@ export function formatBytes(value = 0) {
   return `${size.toFixed(precision)} ${units[unitIndex]}`;
 }
 
-export function formatStorageEstimate(estimate = null, sampleMode = false) {
-  if (sampleMode || !estimate || !Number.isFinite(estimate.usage) || !Number.isFinite(estimate.quota) || estimate.quota <= 0) {
+export function formatStorageEstimate(estimate = null) {
+  // Missing or degraded storage input renders as an explicit em dash instead
+  // of an invented usage figure.
+  if (!estimate || !Number.isFinite(estimate.usage) || !Number.isFinite(estimate.quota) || estimate.quota <= 0) {
     return {
-      text: "12.4 MB / 50 MB",
-      ratio: 24.8
+      text: "—",
+      ratio: 0
     };
   }
   return {
@@ -324,8 +294,7 @@ function formatUnavailableReason(reason = "") {
   return "降级";
 }
 
-function deriveSummarizerState(summarizer = {}, sampleMode = false) {
-  if (sampleMode) return { text: "空闲", tone: "ok", dotTone: "muted" };
+function deriveSummarizerState(summarizer = {}) {
   if (summarizer.status === "degraded" || summarizer.reason) {
     return { text: "降级", tone: "danger", dotTone: "danger" };
   }
@@ -336,7 +305,9 @@ function deriveSummarizerState(summarizer = {}, sampleMode = false) {
 }
 
 function buildDecisionRows(diagnostics, now) {
-  if (!diagnostics?.lastAgentResult && !diagnostics?.lastDecision) return SAMPLE_DECISION_ROWS.map((row) => ({ ...row }));
+  // No diagnostics yet means no decisions yet — an empty table, not sample
+  // rows pretending to be history.
+  if (!diagnostics?.lastAgentResult && !diagnostics?.lastDecision) return [];
   const rows = [];
   const lastAgentResult = diagnostics.lastAgentResult;
   const lastDecision = diagnostics.lastDecision;
@@ -361,7 +332,7 @@ function buildDecisionRows(diagnostics, now) {
       actionTone: lastDecision.shouldShow ? "neutral" : "danger"
     });
   }
-  return rows.concat(SAMPLE_DECISION_ROWS).slice(0, 3);
+  return rows.slice(0, 3);
 }
 
 function formatDecisionId(timestamp) {
@@ -814,7 +785,7 @@ async function refreshConfigConsole() {
 }
 
 function exportSnapshot() {
-  const snapshot = latestViewModel?.snapshot ?? SAMPLE_RUNTIME_SNAPSHOT;
+  const snapshot = latestViewModel?.snapshot ?? EMPTY_RUNTIME_SNAPSHOT;
   const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
