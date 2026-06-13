@@ -13,8 +13,8 @@
     "smoke:pre-recall": "node scripts/pre-recall-browser-smoke-server.js",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
-    "test": "node --test",
-    "test:ci": "node --test",
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:ci": "node --test \"test/**/*.test.js\"",
     "test:integration": "node --test test/layered-memory-integration.test.js",
     "typecheck": "tsc -p tsconfig.json",
     "check": "npm run typecheck && npm run test:ci"

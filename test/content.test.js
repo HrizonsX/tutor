@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { startBrowserCognitiveOverlay } from "../src/extension/content.js";
 import { BROWSER_CONFIG_STORAGE_KEY, DEFAULT_CONFIG, mergeConfig } from "../src/shared/config.js";
 import { AgentResultStatus, MemoryEventType, StreamEventType, StreamLane, SuppressionReason } from "../src/shared/contracts.js";
+import { fakeDocument } from "./helpers/fake-dom.js";
 
 test("content startup keeps memory out of browser storage and forwards feedback events", () => {
   const doc = fakeDocument();
@@ -1581,90 +1582,4 @@ function createFakeTimers() {
       for (const [, handler] of pending) handler();
     }
   };
-}
-
-function fakeDocument() {
-  const body = new FakeElement("body");
-  const listeners = new Map();
-  return {
-    body,
-    title: "Article",
-    activeElement: body,
-    documentElement: { dataset: {} },
-    createElement: (tagName) => new FakeElement(tagName),
-    addEventListener: (type, handler) => listeners.set(type, handler),
-    dispatchEvent: (event) => listeners.get(event.type)?.(event),
-    querySelectorAll: () => []
-  };
-}
-
-class FakeElement {
-  constructor(tagName) {
-    this.tagName = tagName;
-    this.children = [];
-    this.attributes = new Map();
-    this.listeners = new Map();
-    this._textContent = "";
-    this.className = "";
-    this.hidden = false;
-    this.type = "";
-  }
-
-  append(...children) {
-    for (const child of children) {
-      if (child && typeof child === "object") child.parentElement = this;
-    }
-    this.children.push(...children);
-  }
-
-  setAttribute(name, value) {
-    this.attributes.set(name, value);
-  }
-
-  getAttribute(name) {
-    return this.attributes.get(name) ?? null;
-  }
-
-  addEventListener(type, handler) {
-    this.listeners.set(type, handler);
-  }
-
-  click() {
-    this.listeners.get("click")?.();
-  }
-
-  querySelector(selector) {
-    return this.querySelectorAll(selector)[0] ?? null;
-  }
-
-  querySelectorAll(selector) {
-    const matches = [];
-    const visit = (node) => {
-      if (matchesSelector(node, selector)) matches.push(node);
-      for (const child of node.children) visit(child);
-    };
-    visit(this);
-    return matches;
-  }
-
-  set innerHTML(value) {
-    this.children = [];
-    this._innerHTML = value;
-  }
-
-  get textContent() {
-    return `${this._textContent}${this.children.map((child) => child.textContent ?? "").join("")}`;
-  }
-
-  set textContent(value) {
-    this.children = [];
-    this._textContent = String(value ?? "");
-  }
-}
-
-function matchesSelector(node, selector) {
-  if (selector === "button") return node.tagName === "button";
-  if (selector.startsWith(".")) return String(node.className).split(/\s+/).includes(selector.slice(1));
-  if (selector.startsWith("#")) return node.id === selector.slice(1);
-  return node.tagName === selector;
 }

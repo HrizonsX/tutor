@@ -106,7 +106,10 @@ and boundary tests to pass unchanged.
 ## Testing rules
 
 - Behavior tests over source-regex tests. Deterministic by construction:
-  inject `now()`, use the in-file fake timers/DOM, never sleep on wall-clock.
+  inject `now()`, use the fake timers/DOM, never sleep on wall-clock. Shared
+  fakes (the fake DOM) live in `test/helpers/`; discovery is the explicit glob
+  `test/**/*.test.js`, so helper and fixture modules under `test/` are imported
+  by tests, never run as empty test files.
 - A change that breaks an existing test must update that test **in the same
   commit**, with the reasoning in the commit message. Never delete or weaken
   a test to get green.

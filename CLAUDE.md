@@ -13,7 +13,9 @@ first; everything there is binding.
   the PowerShell tool for git/npm/docker; it corrupts CJK file content
   (see Environment gotchas in AGENTS.md).
 - `npm run check` is the merge gate. Run it before reporting work as done,
-  and report test counts honestly (currently ~307 tests; the number only
-  grows).
+  and report test counts honestly (currently ~306 tests; the number only
+  grows). Discovery is the explicit glob `test/**/*.test.js`, so non-test
+  modules under `test/` (`test/helpers/`, `test/fixtures/*.js`) are imported,
+  never counted as empty test files.
 - When the plan and the code disagree, trust the code, record the deviation
   in the commit message, and fix the document.

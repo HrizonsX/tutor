@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { AgentResultStatus, MemoryEventType, StreamEventType, StreamLane } from "../src/shared/contracts.js";
 import { CognitiveOverlay } from "../src/extension/overlay.js";
+import { fakeDocument } from "./helpers/fake-dom.js";
 
 test("overlay renders focused actions and replaces regenerated explanation", async () => {
   const doc = fakeDocument();
@@ -547,88 +548,3 @@ test("overlay ignores stale streaming events and preserves close behavior", () =
   assert.equal(doc.body.querySelector(".bco-stream-direct"), null);
   assert.equal(dismissed.length, 1);
 });
-
-function fakeDocument(options = {}) {
-  const body = new FakeElement("body", options);
-  return {
-    body,
-    createElement: (tagName) => new FakeElement(tagName, options),
-    createElementNS: (_namespace, tagName) => new FakeElement(tagName, options)
-  };
-}
-
-class FakeElement {
-  constructor(tagName, options = {}) {
-    this.tagName = tagName;
-    this.options = options;
-    this.children = [];
-    this.attributes = new Map();
-    this.listeners = new Map();
-    this._textContent = "";
-    this.className = "";
-    this.hidden = false;
-    this.type = "";
-    this.disabled = false;
-  }
-
-  append(...children) {
-    for (const child of children) {
-      if (child && typeof child === "object") child.parentElement = this;
-    }
-    this.children.push(...children);
-  }
-
-  setAttribute(name, value) {
-    this.attributes.set(name, value);
-  }
-
-  getAttribute(name) {
-    return this.attributes.get(name) ?? null;
-  }
-
-  addEventListener(type, handler) {
-    this.listeners.set(type, handler);
-  }
-
-  click() {
-    if (this.disabled) return;
-    this.listeners.get("click")?.();
-  }
-
-  querySelector(selector) {
-    return this.querySelectorAll(selector)[0] ?? null;
-  }
-
-  querySelectorAll(selector) {
-    const matches = [];
-    const visit = (node) => {
-      if (matchesSelector(node, selector)) matches.push(node);
-      for (const child of node.children) visit(child);
-    };
-    visit(this);
-    return matches;
-  }
-
-  set innerHTML(value) {
-    if (this.options.throwOnInnerHTML || (this.options.throwOnNonEmptyInnerHTML && String(value))) {
-      throw new Error("unsafe innerHTML");
-    }
-    this.children = [];
-    this._innerHTML = value;
-  }
-
-  get textContent() {
-    return `${this._textContent}${this.children.map((child) => child.textContent ?? "").join("")}`;
-  }
-
-  set textContent(value) {
-    this.children = [];
-    this._textContent = String(value ?? "");
-  }
-}
-
-function matchesSelector(node, selector) {
-  if (selector === "button") return node.tagName === "button";
-  if (selector.startsWith(".")) return String(node.className).split(/\s+/).includes(selector.slice(1));
-  return node.tagName === selector;
-}
