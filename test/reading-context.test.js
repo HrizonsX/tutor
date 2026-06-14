@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { BehaviorTracker } from "../src/extension/behavior.js";
 import { FragmentType } from "../src/shared/contracts.js";
-import { classifyElement, discoverReadableFragments, ReadingContextTracker, selectCurrentFragment } from "../src/extension/reading-context.js";
+import { classifyElement, discoverReadableFragments, mutationsTouchReadableContent, OVERLAY_ROOT_ID, ReadingContextTracker, selectCurrentFragment } from "../src/extension/reading-context.js";
 
 test("classifies readable element types", () => {
   assert.equal(classifyElement({ tagName: "P" }), FragmentType.PARAGRAPH);
@@ -155,6 +155,30 @@ test("behavior tracker records dwell, revisits, precise selection, and code sele
 
   tracker.recordSelection({ text: "const x = () => { return 1; }", fragment: code, timestamp: now + 1300 });
   assert.equal(tracker.getSummary("c1", now + 1300).codeSelection, true);
+});
+
+test("mutationsTouchReadableContent reacts to readable changes and ignores overlay/editable noise", () => {
+  const overlay = { tagName: "DIV", id: OVERLAY_ROOT_ID, parentElement: null };
+  const overlayChild = { tagName: "SPAN", id: "", parentElement: overlay };
+  const overlayText = { nodeType: 3, parentElement: overlayChild };
+  const paragraph = { tagName: "P", id: "", parentElement: null };
+  const editable = { tagName: "TEXTAREA", id: "", parentElement: null };
+
+  // Unknown or empty batches react, so a real change is never dropped.
+  assert.equal(mutationsTouchReadableContent(), true);
+  assert.equal(mutationsTouchReadableContent([]), true);
+
+  // The overlay renders inside doc.body; its own subtree mutations (the
+  // streaming-update storm) must not schedule a rescan.
+  assert.equal(mutationsTouchReadableContent([{ target: overlay }]), false);
+  assert.equal(mutationsTouchReadableContent([{ target: overlayChild }, { target: overlayText }]), false);
+
+  // Edits inside editable fields are not reading either.
+  assert.equal(mutationsTouchReadableContent([{ target: editable }]), false);
+
+  // A genuine page mutation reacts, even when batched with overlay noise.
+  assert.equal(mutationsTouchReadableContent([{ target: paragraph }]), true);
+  assert.equal(mutationsTouchReadableContent([{ target: overlay }, { target: paragraph }]), true);
 });
 
 function fakeElement(tagName, text, rect, options = {}) {

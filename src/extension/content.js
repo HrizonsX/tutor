@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { BROWSER_CONFIG_STORAGE_KEY, loadRuntimeConfig, mergeConfig } from "../shared/config.js";
-import { ReadingContextTracker, isIgnoredReadingSurface } from "./reading-context.js";
+import { ReadingContextTracker, isIgnoredReadingSurface, mutationsTouchReadableContent } from "./reading-context.js";
 import { BehaviorTracker, summarizeSelectionValidation } from "./behavior.js";
 import { extractConceptCandidates, normalizeKnowledgeObjectName, validateSelectedConcept } from "../shared/concepts.js";
 import { composeShortExplanation, createComposerInput, regenerateExplanation } from "./composer.js";
@@ -777,7 +777,11 @@ export function startBrowserCognitiveOverlay({
   // Single lifecycle seam for the periodic work: "disabled" must really stop
   // the interval and the whole-body MutationObserver, not just hide the UI.
   const MutationObserverCtor = win.MutationObserver;
-  const mutationObserver = MutationObserverCtor ? new MutationObserverCtor(scheduleEvaluate) : null;
+  const mutationObserver = MutationObserverCtor
+    ? new MutationObserverCtor((records) => {
+        if (mutationsTouchReadableContent(records)) scheduleEvaluate();
+      })
+    : null;
   let loopsRunning = false;
   function startLoops() {
     if (loopsRunning) return;

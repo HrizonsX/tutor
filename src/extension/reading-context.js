@@ -2,7 +2,7 @@
 import { FragmentType } from "../shared/contracts.js";
 import { hashString } from "../shared/privacy.js";
 
-const OVERLAY_ROOT_ID = "browser-cognitive-overlay";
+export const OVERLAY_ROOT_ID = "browser-cognitive-overlay";
 const EDITABLE_TAGS = new Set(["input", "textarea", "select", "option"]);
 
 const READABLE_SELECTOR = [
@@ -151,6 +151,17 @@ export function isIgnoredReadingSurface(node) {
     current = current.parentElement ?? null;
   }
   return false;
+}
+
+// A DOM mutation is worth a re-evaluation only when it changes readable page
+// content. The overlay renders inside doc.body, so without this gate its own
+// show/hide and (high-frequency) streaming text updates would each schedule a
+// redundant evaluate — a full rescan competing with the live session. Edits in
+// editable fields are likewise not reading. Unknown/empty batches react, so a
+// real change is never dropped.
+export function mutationsTouchReadableContent(records) {
+  if (!Array.isArray(records) || records.length === 0) return true;
+  return records.some((record) => !isIgnoredReadingSurface(record?.target));
 }
 
 function elementFromNode(node) {
