@@ -814,8 +814,6 @@ export function startBrowserCognitiveOverlay({
   };
 }
 
-startBrowserCognitiveOverlay();
-
 async function runStreamingExplanation({
   agentClient,
   target,
@@ -1132,3 +1130,12 @@ function createEphemeralLearningContext({ candidate, factSensitivity, cooldowns 
     retrievalMode: "immediate_browser_context"
   };
 }
+
+// Module entry point — must stay the LAST statement in the file. It runs during
+// module evaluation, so every top-level binding it transitively reads must be
+// initialized first. `installBrowserConfigUpdateListener` closes over the
+// module-level `const browserConfigDispatchers`; when this call sat above that
+// declaration the browser hit a temporal-dead-zone ReferenceError on startup
+// (node's import skipped the body because globalThis.document/chrome are absent,
+// so the unit suite never caught it). Keep new top-level const/let above here.
+startBrowserCognitiveOverlay();
