@@ -59,7 +59,13 @@ test("layered round-trip: a fresh repository recalls events written by a previou
   // (long-term memory SHALL remain queryable from Postgres).
   const reader = createIntegrationRepository();
   await reader.ready;
-  const packet = reader.queryMemory({ canonicalName: concept, timestamp: Date.now() });
+  // queryMemory returns a promise once an async layer is wired in: a real
+  // Redis session view resolves getContext asynchronously, so the layered
+  // repository's after()-composed result is a promise too. Await it before
+  // closing the reader. The default unit suite uses a synchronous in-memory
+  // session view where the same call returns the packet directly; awaiting a
+  // non-promise is a no-op, so this is correct for both paths.
+  const packet = await reader.queryMemory({ canonicalName: concept, timestamp: Date.now() });
   const health = reader.getHealth();
   await reader.close();
 
