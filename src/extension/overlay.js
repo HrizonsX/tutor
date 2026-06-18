@@ -393,21 +393,32 @@ export class CognitiveOverlay {
   applyLaneFinal(event = {}) {
     const result = event.result ?? {};
     const text = result.text ?? result.microExplanation ?? result.explanation ?? "";
+    const available = result.status === AgentResultStatus.AVAILABLE;
     if (event.lane === StreamLane.ASSOCIATION) {
-      if (result.reason === "no_memory_bridge" || result.reason === "weak_candidates_only") {
-        this.streamState.associationText = "暂无关联";
-        this.setLaneText(StreamLane.ASSOCIATION, "暂无关联");
-      } else if (text && !this.streamState.associationText) {
+      if (text && !this.streamState.associationText) {
         this.streamState.associationText = text;
         this.setLaneText(StreamLane.ASSOCIATION, text);
+      } else if (!this.streamState.associationText) {
+        // Any final without renderable text resolves the lane to an honest
+        // empty state — never leave "正在查找关联记忆..." spinning forever.
+        this.streamState.associationText = "暂无关联";
+        this.setLaneText(StreamLane.ASSOCIATION, "暂无关联");
       }
       return;
     }
     if (text && !this.streamState.directText) {
       this.streamState.directText = text;
       this.setLaneText(StreamLane.DIRECT, text);
+    } else if (!available && !this.streamState.directText) {
+      // The primary lane finalized with no explanation (e.g. no provider
+      // configured). Show why, instead of a silently blank card — honest
+      // empty states are an invariant. Guarding on directText keeps any
+      // partial deltas that streamed in before the unavailable final.
+      const message = directLaneUnavailableMessage(result);
+      this.streamState.directText = message;
+      this.setLaneText(StreamLane.DIRECT, message);
     }
-    if (result.status === AgentResultStatus.AVAILABLE) {
+    if (available) {
       const version = result.explanationVersion ?? result.versionMetadata ?? result;
       this.currentPrompt = {
         ...this.currentPrompt,
@@ -459,6 +470,19 @@ export class CognitiveOverlay {
     expanded.hidden = true;
     expanded.textContent = "";
   }
+}
+
+// Map a normalized unavailable reason to actionable copy for the primary lane.
+// Reasons are normalized codes (never sensitive), so this is display-only.
+function directLaneUnavailableMessage(result = {}) {
+  const reason = String(result.reason ?? result.unavailableReason ?? "");
+  if (/pairing/.test(reason)) return "网关未配对:在扩展设置中填入配对令牌";
+  if (/rate_limit/.test(reason)) return "解释服务繁忙,请稍后再试";
+  if (/unconfigured|capability_unsupported|provider/.test(reason)) {
+    return "解释服务未配置:在网关启用 Agent provider(测试可用 gateway:stub)";
+  }
+  if (/runtime_unavailable|runtime_stream/.test(reason)) return "扩展后台未就绪:请在 chrome://extensions 重载扩展";
+  return "解释暂不可用";
 }
 
 function createFeedbackKey(type, prompt = {}, extra = {}) {

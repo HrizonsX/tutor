@@ -8,25 +8,14 @@
     await import(contentUrl);
     root.dataset.bcoLoaderState = "loaded";
   } catch (error) {
+    // Honest terminal failure. We deliberately do NOT fall back to injecting a
+    // page-world <script type="module">: that runs in the page main world, where
+    // the extension's chrome.runtime/chrome.storage are unavailable, so
+    // content.js could not reach the background service or the gateway and would
+    // fail silently while still looking "loaded". Failing loudly is the honest
+    // state and surfaces real module-evaluation errors (e.g. a TDZ crash).
     root.dataset.bcoLoaderState = "module_import_failed";
     root.dataset.bcoLoaderError = error?.message ?? String(error);
     console.error("[BCO] Failed to start Browser Cognitive Overlay", error);
-    injectPageModule(contentUrl, root);
   }
 })();
-
-function injectPageModule(src, root) {
-  const script = document.createElement("script");
-  script.type = "module";
-  script.src = src;
-  script.onload = () => {
-    root.dataset.bcoLoaderState = "loaded_via_page_module";
-    script.remove();
-  };
-  script.onerror = () => {
-    root.dataset.bcoLoaderState = "failed";
-    root.dataset.bcoLoaderError = "Could not load content module";
-    script.remove();
-  };
-  (document.head || document.documentElement).append(script);
-}

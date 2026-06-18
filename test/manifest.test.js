@@ -11,7 +11,11 @@ test("manifest loads the ESM content script through a classic loader", async () 
   assert.match(loaderSource, /import\(contentUrl\)/);
   assert.match(loaderSource, /Failed to start Browser Cognitive Overlay/);
   assert.match(loaderSource, /bcoLoaderState/);
-  assert.match(loaderSource, /loaded_via_page_module/);
+  // Honest terminal failure on import error — and no page-world <script>
+  // fallback (it runs in the main world without chrome.runtime and would break
+  // gateway comms silently).
+  assert.match(loaderSource, /module_import_failed/);
+  assert.doesNotMatch(loaderSource, /createElement\("script"\)/);
 });
 
 test("manifest exposes only extension and shared modules to dynamic content imports", async () => {

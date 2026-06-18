@@ -269,6 +269,15 @@ export function startBrowserCognitiveOverlay({
   let pointerSelectionActive = false;
   let ignoredSelectionGesture = false;
   let evaluating = false;
+  // Coalesced re-run: evaluate() serializes itself with `evaluating`, but a pass
+  // can hold that lock across `await`s (memory-context fetch, and a streaming
+  // explanation that lasts seconds with a real paired provider). A selection
+  // finalized during that window calls evaluate() directly and would otherwise
+  // be dropped with `evaluate_in_flight` and never retried until the 3s tick.
+  // This flag re-arms exactly one pass when the lock releases so the latest
+  // selection always gets scored. (Invisible before pairing: the stream
+  // resolved in microseconds, so the drop window was negligible.)
+  let evaluatePending = false;
   const recentEncounters = new Map();
   const recentSelections = new Map();
   const pendingExplanations = new Set();
@@ -417,6 +426,9 @@ export function startBrowserCognitiveOverlay({
       return setLastSuppressedDecision(doc, "feature_disabled", null, {}, isDevMode());
     }
     if (evaluating) {
+      // Re-arm one pass for after the in-flight one releases the lock, so a
+      // selection made mid-stream is not silently lost.
+      evaluatePending = true;
       return setLastSuppressedDecision(doc, "evaluate_in_flight", null, {}, isDevMode());
     }
     evaluating = true;
@@ -691,6 +703,12 @@ export function startBrowserCognitiveOverlay({
       return decision;
     } finally {
       evaluating = false;
+      if (evaluatePending) {
+        // A selection (or other signal) arrived while this pass held the lock.
+        // Schedule one fresh pass so the newest reading state gets scored.
+        evaluatePending = false;
+        scheduleEvaluate(0);
+      }
     }
   };
 
@@ -804,6 +822,9 @@ export function startBrowserCognitiveOverlay({
     evaluate,
     stop() {
       stopLoops();
+      // Drop any pending re-arm so a parked-mid-stream evaluate that settles
+      // after stop() does not schedule a fresh pass past teardown.
+      evaluatePending = false;
       win.clearTimeout?.(debounce);
       win.clearTimeout?.(selectionDebounce);
       win.clearTimeout?.(selectionFinalizeDebounce);

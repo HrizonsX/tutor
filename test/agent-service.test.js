@@ -21,6 +21,31 @@ import { createLocalGatewayHandler } from "../src/gateway/local-gateway.js";
 import { createLocalGatewayClient } from "../src/extension/provider-registry.js";
 import { createGatewayRuntimeConfigState } from "../src/gateway/runtime-config.js";
 
+test("aborting a stream settles the client promise immediately (no SESSION_CANCELLED echo)", async () => {
+  // Chrome does not fire onDisconnect for a self-initiated port.disconnect() and
+  // the background sends no SESSION_CANCELLED back, so the abort handler must
+  // settle the promise itself — otherwise the caller's evaluate() lock stays
+  // held until the 30s idle watchdog. The fake port intentionally never echoes
+  // any message, mirroring real Chrome behavior.
+  const controller = new AbortController();
+  const port = {
+    postMessage() {},
+    disconnect() {},
+    onMessage: { addListener() {} },
+    onDisconnect: { addListener() {} }
+  };
+  const runtime = { connect: () => port };
+  const client = createBackgroundAgentClient(runtime, { streamIdleTimeoutMs: 60000 });
+  const resultPromise = client.streamExplanation(
+    { target: { canonicalName: "KL divergence", observedText: "KL divergence" } },
+    { signal: controller.signal }
+  );
+  controller.abort();
+  const result = await resultPromise; // would hang until the 60s watchdog without the fix
+  assert.equal(result.status, AgentResultStatus.UNAVAILABLE);
+  assert.equal(result.reason, "runtime_stream_cancelled");
+});
+
 const input = {
   target: {
     canonicalName: "Lagrange point",

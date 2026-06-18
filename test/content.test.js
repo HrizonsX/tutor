@@ -5,6 +5,131 @@ import { BROWSER_CONFIG_STORAGE_KEY, DEFAULT_CONFIG, mergeConfig } from "../src/
 import { AgentResultStatus, MemoryEventType, StreamEventType, StreamLane, SuppressionReason } from "../src/shared/contracts.js";
 import { fakeDocument } from "./helpers/fake-dom.js";
 
+test("module auto-start tolerates a browser-like global at load (TDZ regression)", async () => {
+  // The top-level startBrowserCognitiveOverlay() runs during module evaluation.
+  // A normal node import has no globalThis.document/chrome, so the startup body
+  // returns early and never reaches the auto-start path that a real browser
+  // takes — which is how a use-before-init ordering bug (the auto-start sitting
+  // above a const it transitively reads) shipped invisibly to the unit suite.
+  // Reproduce the browser path with browser-like globals so that class of bug
+  // fails here instead of only in Chrome.
+  const priorDoc = globalThis.document;
+  const priorWin = globalThis.window;
+  globalThis.document = fakeDocument();
+  globalThis.window = fakeWindow([]);
+  try {
+    // Query string busts the import cache so a fresh module instance re-runs
+    // its top-level auto-start with the globals above in place.
+    await import("../src/extension/content.js?tdz-regression");
+  } finally {
+    globalThis.document = priorDoc;
+    globalThis.window = priorWin;
+  }
+  // Reaching here means module evaluation (auto-start included) did not throw.
+  assert.ok(true);
+});
+
+test("a selection made during an in-flight streaming evaluate is re-evaluated when the lock releases", async () => {
+  // Regression for the root cause of "triggering broke once the gateway was
+  // paired": evaluate() holds the `evaluating` lock across the streaming await
+  // (seconds with a real provider). A second selection in that window used to be
+  // dropped with evaluate_in_flight and never retried; the coalescing re-arm
+  // must schedule a fresh pass so the newest selection is honored.
+  const doc = fakeDocument();
+  const scheduled = [];
+  const timers = {
+    setTimeout: (fn, delay) => { scheduled.push({ fn, delay }); return scheduled.length; },
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {}
+  };
+  let currentSelection = "KV cache";
+  const targets = [];
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  const streamFinal = (input, n) => ({
+    status: AgentResultStatus.AVAILABLE,
+    target: input.target,
+    text: "ok",
+    microExplanation: "ok",
+    versionMetadata: { id: `v_${n}`, source: "external_agent" }
+  });
+  const runtime = startBrowserCognitiveOverlay({
+    doc,
+    win: fakeWindow([], { timers, getSelectionText: () => currentSelection }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    agentClient: {
+      streamExplanation: async (input, { onEvent }) => {
+        targets.push(input.target?.canonicalName ?? input.target?.observedText ?? "");
+        if (targets.length === 1) await firstGate; // park the first pass mid-stream
+        const sid = `s_${targets.length}`;
+        onEvent({ type: StreamEventType.SESSION_START, sessionId: sid, sequence: 0, target: input.target });
+        onEvent({ type: StreamEventType.LANE_FINAL, sessionId: sid, sequence: 1, lane: StreamLane.DIRECT, result: streamFinal(input, targets.length) });
+        onEvent({ type: StreamEventType.SESSION_DONE, sessionId: sid, sequence: 2 });
+        return streamFinal(input, targets.length);
+      }
+    },
+    memoryClient: { writeMemoryEvent: async () => {} },
+    now: () => 1000
+  });
+  runtime.contextTracker.update = () => ({ id: "p1", type: "paragraph", text: "KV cache and self-attention are transformer concepts." });
+  runtime.behaviorTracker.observeFragment = () => ({});
+  runtime.behaviorTracker.getSummary = () => ({ selectedPreciseTerm: true, selectionText: currentSelection });
+
+  const pass1 = runtime.evaluate();        // acquires the lock, parks in the stream for "KV cache"
+  currentSelection = "self-attention";     // user selects a different term mid-stream
+  await runtime.evaluate();                // dropped with evaluate_in_flight; re-arm flag set
+  assert.equal(targets.length, 1);         // the second selection sent nothing yet
+  releaseFirst();
+  await pass1;                             // first stream completes and the finally re-arms
+
+  const rearm = scheduled.find((entry) => entry.delay === 0);
+  assert.ok(rearm, "a fresh evaluate pass must be re-armed after the lock releases");
+  await rearm.fn();                        // run the coalesced re-evaluation
+  assert.ok(
+    targets.some((t) => String(t).toLowerCase().includes("self-attention")),
+    "the mid-stream selection must finally reach the gateway"
+  );
+  runtime.stop();
+});
+
+test("streaming card shows an honest message when the explanation is unavailable (never a blank card)", async () => {
+  // Regression for the reported "弹框出来了但没解释": a paired gateway with no
+  // provider finalizes the direct lane UNAVAILABLE with empty text. The lane
+  // must show why instead of staying blank, and the association lane must not
+  // spin on "正在查找关联记忆..." forever.
+  const doc = fakeDocument();
+  const runtime = startBrowserCognitiveOverlay({
+    doc,
+    win: fakeWindow([], { getSelectionText: () => "KL divergence" }),
+    config: mergeConfig(DEFAULT_CONFIG, { featureEnabled: true }),
+    agentClient: {
+      streamExplanation: async (input, { onEvent }) => {
+        onEvent({ type: StreamEventType.SESSION_START, sessionId: "s_unavail", sequence: 0, target: input.target });
+        onEvent({ type: StreamEventType.LANE_FINAL, sessionId: "s_unavail", sequence: 1, lane: StreamLane.DIRECT, result: { status: AgentResultStatus.UNAVAILABLE, reason: "agent_provider_unconfigured", text: "" } });
+        onEvent({ type: StreamEventType.LANE_FINAL, sessionId: "s_unavail", sequence: 2, lane: StreamLane.ASSOCIATION, result: { status: AgentResultStatus.UNAVAILABLE, reason: "streaming_capability_unavailable", text: "" } });
+        onEvent({ type: StreamEventType.SESSION_DONE, sessionId: "s_unavail", sequence: 3 });
+        return { status: AgentResultStatus.UNAVAILABLE, reason: "agent_provider_unconfigured", text: "" };
+      }
+    },
+    memoryClient: { writeMemoryEvent: async () => {} },
+    now: () => 1000
+  });
+  runtime.contextTracker.update = () => ({ id: "p1", type: "paragraph", text: "KL divergence measures how one distribution differs from another." });
+  runtime.behaviorTracker.observeFragment = () => ({});
+  runtime.behaviorTracker.getSummary = () => ({ selectedPreciseTerm: true, selectionText: "KL divergence" });
+
+  await runtime.evaluate();
+
+  const direct = doc.body.querySelector(".bco-stream-direct");
+  const association = doc.body.querySelector(".bco-stream-association");
+  assert.ok(direct, "the streaming card must be shown");
+  assert.notEqual(direct.textContent, "", "the primary lane must never be left blank");
+  assert.match(direct.textContent, /解释服务未配置/);
+  assert.equal(association.textContent, "暂无关联");
+  runtime.stop();
+});
+
 test("content startup keeps memory out of browser storage and forwards feedback events", () => {
   const doc = fakeDocument();
   const storageAccesses = [];

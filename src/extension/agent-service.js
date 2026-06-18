@@ -424,8 +424,13 @@ export function createBackgroundAgentClient(runtime = globalThis.chrome?.runtime
                 port.postMessage?.({ type: "cancel" });
                 port.disconnect?.();
               } catch {
-                finish(createUnavailableAgentResult({ reason: "runtime_stream_cancelled", input }));
+                // Port teardown failure must not block settling.
               }
+              // Chrome does not fire onDisconnect for a self-initiated
+              // disconnect and the background sends no SESSION_CANCELLED back,
+              // so settle here (idempotent via the settled guard) rather than
+              // leaving the caller's in-flight lock held until the idle watchdog.
+              finish(createUnavailableAgentResult({ reason: "runtime_stream_cancelled", input }));
             }, { once: true });
           }
           port.postMessage?.({ input, goal: AgentRequestGoal.MICRO });
