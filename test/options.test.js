@@ -87,6 +87,21 @@ test("options view model shows explicit unpaired guidance when pairing token is 
   assert.equal(rejected.connection.tone, "danger");
 });
 
+test("connection card reports unpaired when pairing is required but unconfigured, even if health is available", () => {
+  // /health can report available against an unauthenticated gateway while the
+  // extension has no pairing token; diagnostics.pairingStatus carries the truth
+  // and must override a misleading "稳定".
+  const model = buildOptionsViewModel({
+    health: { status: AgentResultStatus.AVAILABLE, mode: ProviderKind.LOCAL, capabilities: { [AgentCapability.EXPLAIN]: true } },
+    diagnostics: { pairingStatus: { required: true, configured: false } },
+    latencyMs: 18,
+    now: () => 2000
+  });
+
+  assert.equal(model.connection.tone, "danger");
+  assert.match(model.connection.text, /未配对/);
+});
+
 test("options view model exposes layered memory component status", () => {
   const model = buildOptionsViewModel({
     health: {

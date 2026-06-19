@@ -49,12 +49,20 @@ export function buildOptionsViewModel({
     ? "未配置"
     : formatProviderSummary(providerMode, providerRole.modelName || providerHealth.modelName);
   const healthStatus = providerHealth.status ?? health?.status ?? AgentResultStatus.UNAVAILABLE;
-  const connectionAvailable = isAvailable(healthStatus);
+  // /health can report "available" against an unauthenticated gateway even when
+  // the extension has no pairing token — but every real explain then fails as
+  // local_gateway_pairing_required. The diagnostics pairingStatus carries the
+  // truth, so surface it rather than a misleading "稳定".
+  const pairingStatus = diagnostics?.pairingStatus ?? {};
+  const pairingRequiredUnconfigured = Boolean(pairingStatus.required) && !pairingStatus.configured;
+  const connectionAvailable = isAvailable(healthStatus) && !pairingRequiredUnconfigured;
   const connectionTone = !emptyState && connectionAvailable ? "steady" : "danger";
   const connectionSummary = emptyState
     ? "未连接"
     : connectionAvailable
     ? `稳定 (${Number.isFinite(latencyMs) ? Math.max(0, Math.round(latencyMs)) : 12}ms 延迟)`
+    : pairingRequiredUnconfigured
+    ? "未配对(请在下方填写配对令牌)"
     : formatUnavailableReason(providerHealth.reason ?? health?.reason ?? "local_gateway_unreachable");
 
   const memoryRepository = health?.memoryRepository

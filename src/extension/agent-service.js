@@ -375,6 +375,9 @@ export function createBackgroundAgentClient(runtime = globalThis.chrome?.runtime
       }
       return new Promise((resolve) => {
         let lastResult = null;
+        let directResult = null;
+        const preferredResult = () =>
+          (directResult?.status === AgentResultStatus.AVAILABLE ? directResult : lastResult);
         let settled = false;
         let idleTimer = null;
         const clearIdleTimer = () => {
@@ -411,13 +414,14 @@ export function createBackgroundAgentClient(runtime = globalThis.chrome?.runtime
             armIdleTimer();
             onEvent(event);
             if (event?.type === StreamEventType.LANE_FINAL && event.result) {
+              if (event.lane === StreamLane.DIRECT) directResult = event.result;
               lastResult = event.result;
             }
             if (event?.type === StreamEventType.SESSION_DONE || event?.type === StreamEventType.SESSION_CANCELLED) {
-              finish(lastResult);
+              finish(preferredResult());
             }
           });
-          port.onDisconnect?.addListener?.(() => finish(lastResult ?? createUnavailableAgentResult({ reason: "runtime_stream_disconnected", input })));
+          port.onDisconnect?.addListener?.(() => finish(preferredResult() ?? createUnavailableAgentResult({ reason: "runtime_stream_disconnected", input })));
           if (signal) {
             signal.addEventListener?.("abort", () => {
               try {
@@ -449,8 +453,6 @@ export function createBackgroundAgentClient(runtime = globalThis.chrome?.runtime
 
 export function createBackgroundService({
   config = DEFAULT_CONFIG,
-  providerClient = null,
-  embeddingClient = null,
   providerRegistry = null,
   diagnostics = createDiagnosticsState(),
   fetchImpl = globalThis.fetch,
@@ -477,8 +479,6 @@ export function createBackgroundService({
     config: runtimeConfig,
     chromeApi,
     fetchImpl,
-    providerClient,
-    embeddingClient,
     now
   });
   diagnostics.setProviderConfigState?.(registry.getDiagnosticsState?.() ?? {});
@@ -533,6 +533,9 @@ export function createBackgroundService({
 
   function handleStreamPort(port = {}) {
     if (!port?.onMessage?.addListener || typeof port.postMessage !== "function") return false;
+    // Only the explain-stream protocol belongs here; a named port from any other
+    // context must not be wired into the explanation pipeline.
+    if (port.name && port.name !== BackgroundMessageType.EXPLAIN_KNOWLEDGE_STREAM) return false;
     let abortController = null;
     port.onMessage.addListener((message = {}) => {
       if (message?.type === "cancel" || message?.cancel === true) {
@@ -665,6 +668,16 @@ export function createBackgroundService({
     onEvent = () => {},
     signal = null
   } = {}) {
+    // Same hydration gate as handleMessage: a restarted MV3 worker must not
+    // resolve the provider against default (unpaired) config while the persisted
+    // browser config is still loading. The streaming port is the PRIMARY entry
+    // point and is exactly what wakes an evicted worker, so without this the
+    // first selection after every worker recycle would falsely report
+    // local_gateway_pairing_required for a correctly-paired user.
+    if (configHydration) {
+      await configHydration;
+      configHydration = null;
+    }
     const capabilityKind = AgentCapability.EXPLAIN;
     const provider = registry.resolveProvider(capabilityKind, { role: ProviderRole.EXPLAIN });
     if (provider.unavailableReason) {
@@ -992,8 +1005,6 @@ export function createBackgroundService({
         config: runtimeConfig,
         chromeApi,
         fetchImpl,
-        providerClient,
-        embeddingClient,
         now,
         healthCache: new Map()
       });
@@ -1042,7 +1053,15 @@ async function sendRuntimeMessage(runtime, message) {
   return new Promise((resolve) => {
     try {
       runtime.sendMessage(message, (response) => {
-        resolve(response ?? createUnavailableAgentResult({ reason: "empty_background_response", input: message.payload?.input ?? {} }));
+        // Read lastError to mark it checked — otherwise Chrome logs an
+        // "Unchecked runtime.lastError" warning on the page (<all_urls>) for
+        // every message dropped while the service worker is asleep/torn down.
+        const lastError = runtime.lastError;
+        resolve(response ?? createUnavailableAgentResult({
+          reason: "empty_background_response",
+          input: message.payload?.input ?? {},
+          details: lastError ? { message: lastError.message } : null
+        }));
       });
     } catch (error) {
       resolve(createUnavailableAgentResult({

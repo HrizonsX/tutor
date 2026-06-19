@@ -8,6 +8,7 @@ import {
 } from "../src/extension/agent-service.js";
 import {
   AgentCapability,
+  AgentRequestGoal,
   AgentResultStatus,
   BackgroundMessageType,
   FactSensitivity,
@@ -17,7 +18,7 @@ import {
   StreamLane
 } from "../src/shared/contracts.js";
 import { DEFAULT_CONFIG, mergeConfig } from "../src/shared/config.js";
-import { createLocalGatewayHandler } from "../src/gateway/local-gateway.js";
+import { createLocalGatewayHandler, createLocalMemoryStore } from "../src/gateway/local-gateway.js";
 import { createLocalGatewayClient } from "../src/extension/provider-registry.js";
 import { createGatewayRuntimeConfigState } from "../src/gateway/runtime-config.js";
 
@@ -44,6 +45,85 @@ test("aborting a stream settles the client promise immediately (no SESSION_CANCE
   const result = await resultPromise; // would hang until the 60s watchdog without the fix
   assert.equal(result.status, AgentResultStatus.UNAVAILABLE);
   assert.equal(result.reason, "runtime_stream_cancelled");
+});
+
+test("stream explain waits for config hydration before resolving the provider (MV3 restart race)", async () => {
+  // After a service-worker recycle the streaming port (the primary explain
+  // entry point) is opened before the persisted pairing token has hydrated.
+  // Without the gate, the provider resolves against default (empty-token) config
+  // and emits a spurious local_gateway_pairing_required, and the gateway never
+  // sees the request. handleMessage was gated; the stream path was not.
+  let resolveHydration;
+  const configHydration = new Promise((r) => { resolveHydration = r; });
+  const requests = [];
+  const handler = createLocalGatewayHandler({ token: "tkn", store: createLocalMemoryStore(), now: () => 1000 });
+  const service = createBackgroundService({
+    config: mergeConfig(DEFAULT_CONFIG, { localGateway: { endpoint: "http://127.0.0.1:17321", pairingToken: "" } }),
+    configHydration,
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, method: options.method });
+      return handler({ url, method: options.method, headers: options.headers, body: options.body });
+    },
+    now: () => 1000
+  });
+  const events = [];
+  let portMessage;
+  const port = {
+    name: BackgroundMessageType.EXPLAIN_KNOWLEDGE_STREAM,
+    onMessage: { addListener: (l) => { portMessage = l; } },
+    onDisconnect: { addListener: () => {} },
+    postMessage: (event) => events.push(event)
+  };
+  service.handleStreamPort(port);
+
+  // Open the stream BEFORE the persisted pairing token has hydrated.
+  const streamPromise = portMessage({
+    input: { target: { canonicalName: "KL divergence", observedText: "KL divergence" } },
+    goal: AgentRequestGoal.MICRO
+  });
+  // Hydrate to the paired config, then release the gate.
+  await service.updateBrowserConfig({ localGateway: { endpoint: "http://127.0.0.1:17321", pairingToken: "tkn" } });
+  resolveHydration();
+  await streamPromise;
+
+  const reasons = events.map((event) => event?.result?.reason).filter(Boolean);
+  // The fix: post-hydration the provider resolves against the PAIRED config, so
+  // there is no spurious pairing error and the request actually reaches the
+  // gateway (here a provider-less store, which then honestly reports
+  // provider_capability_unsupported). Without the gate the stream resolves
+  // against the empty-token default, short-circuits on
+  // local_gateway_pairing_required, and never contacts the gateway at all.
+  assert.ok(
+    !reasons.includes("local_gateway_pairing_required"),
+    `stream emitted a spurious unpaired result: ${reasons.join(", ")}`
+  );
+  assert.ok(
+    requests.some((request) => /\/health/.test(request.url)),
+    "the gateway must be contacted after hydration (request not short-circuited on pairing)"
+  );
+});
+
+test("streaming client resolves the DIRECT lane result, not whichever lane finalized last", async () => {
+  // The gateway/fallback emit the DIRECT lane_final then the ASSOCIATION
+  // lane_final (which is unavailable for a first-time term). The client must
+  // resolve with the available direct result, not the association lane's
+  // unavailable one.
+  let portMessage;
+  const port = {
+    name: BackgroundMessageType.EXPLAIN_KNOWLEDGE_STREAM,
+    onMessage: { addListener: (l) => { portMessage = l; } },
+    onDisconnect: { addListener: () => {} },
+    postMessage: () => {},
+    disconnect: () => {}
+  };
+  const client = createBackgroundAgentClient({ connect: () => port }, { streamIdleTimeoutMs: 60000 });
+  const resultPromise = client.streamExplanation({ target: { canonicalName: "KL divergence" } }, {});
+  portMessage({ type: StreamEventType.LANE_FINAL, lane: StreamLane.DIRECT, result: { status: AgentResultStatus.AVAILABLE, text: "ok", microExplanation: "ok" } });
+  portMessage({ type: StreamEventType.LANE_FINAL, lane: StreamLane.ASSOCIATION, result: { status: AgentResultStatus.UNAVAILABLE, reason: "no_memory_bridge" } });
+  portMessage({ type: StreamEventType.SESSION_DONE });
+  const result = await resultPromise;
+  assert.equal(result.status, AgentResultStatus.AVAILABLE);
+  assert.equal(result.microExplanation ?? result.text, "ok");
 });
 
 const input = {
